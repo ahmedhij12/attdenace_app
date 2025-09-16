@@ -1,7 +1,7 @@
 // src/pages/Settings.tsx
 import React, { useEffect, useState } from 'react'
 import { useAuthStore } from '@/store/auth'
-import { api, BRANCHES } from '@/api/client'
+import { api } from '@/api/client'
 import { useNavigate } from 'react-router-dom'
 
 type UserRow = {
@@ -14,12 +14,15 @@ type UserRow = {
 export default function Settings() {
   const theme = useAuthStore((s) => s.theme)
   const toggleTheme = useAuthStore((s) => s.toggleTheme)
+  const sessionRole = useAuthStore((s) => (s as any).role) as string | undefined
   const navigate = useNavigate()
 
   // me (to decide if admin)
   const [me, setMe] = useState<UserRow | null>(null)
-  // ✅ Show User Management for admin or HR (case-insensitive)
-  const isAdmin = ['admin','hr'].includes(((me?.role as any) || '').toString().toLowerCase())
+  // ✅ Show User Management for admin/HR; also trust store role so the block never disappears
+  const isAdmin = ['admin', 'hr'].includes(
+    ((me?.role as any) || sessionRole || '').toString().toLowerCase()
+  )
 
   // Change password
   const [oldPw, setOldPw] = useState('')
@@ -33,10 +36,8 @@ export default function Settings() {
   const [loadingUsers, setLoadingUsers] = useState(false)
   const [errorUsers, setErrorUsers] = useState<string | null>(null)
 
-  // branch suggestions (from constants + live data)
-  const [branchOptions, setBranchOptions] = useState<string[]>(
-    Array.isArray(BRANCHES) ? BRANCHES.filter(Boolean) : []
-  )
+  // branch suggestions (built from live data)
+  const [branchOptions, setBranchOptions] = useState<string[]>([])
 
   // create user form
   const [newUser, setNewUser] = useState<UserRow>({
@@ -93,7 +94,7 @@ export default function Settings() {
   // ------------------------------------------------
 
   function signOut() {
-    try { useAuthStore.getState().setSession('', '', '') } catch {}
+    try { (useAuthStore as any).getState().setSession('', '', '') } catch {}
     localStorage.removeItem('token')
     localStorage.removeItem('auth_token')
     localStorage.removeItem('access_token')
@@ -111,7 +112,7 @@ export default function Settings() {
       setOldPw(''); setNewPw(''); setConfirmPw('')
       setTimeout(() => {
         try {
-          useAuthStore.getState().setSession('', '', '')
+          (useAuthStore as any).getState().setSession('', '', '')
           localStorage.removeItem('token')
           localStorage.removeItem('auth_token')
           localStorage.removeItem('access_token')
@@ -132,13 +133,15 @@ export default function Settings() {
       const raw = String((data as any).role ?? 'manager').toLowerCase().trim()
       const norm = raw.includes('admin') ? 'admin' : raw.includes('hr') ? 'hr' : 'manager'
       setMe({
-        username: data.username,
-        email: data.email || '',
+        username: (data as any).username,
+        email: (data as any).email || '',
         role: norm as any,
-        allowed_branches: Array.isArray(data.allowed_branches) ? data.allowed_branches : [],
+        allowed_branches: Array.isArray((data as any).allowed_branches)
+          ? (data as any).allowed_branches
+          : [],
       })
     } catch {
-      // ignore
+      // fall back to store role; UI gating already uses sessionRole
     }
   }
   async function loadUsers() {
@@ -155,12 +158,12 @@ export default function Settings() {
   async function loadBranchOptions() {
     try {
       const [emps, devs] = await Promise.all([api.getEmployees({}), api.getDevices()])
-      const set = new Set<string>(branchOptions)
+      const set = new Set<string>()
       for (const e of emps as any[]) if (e.branch) set.add(String(e.branch))
       for (const d of devs as any[]) if (d.branch) set.add(String(d.branch))
       setBranchOptions(Array.from(set).filter(Boolean).sort())
     } catch {
-      // ignore; keep BRANCHES fallback
+      // ignore
     }
   }
 
@@ -185,7 +188,7 @@ export default function Settings() {
           username: newUser.username.trim(),
           password: newUserPassword,
           email: newUser.email || null,
-          role: newUser.role,
+          role: newUser.role, // backend accepts only 'admin' | 'manager'
           allowed_branches: newUser.role === 'manager' ? newUser.allowed_branches : [],
         }),
       })
@@ -195,7 +198,7 @@ export default function Settings() {
       await loadUsers()
       alert('User created')
     } catch {
-      alert('Create failed (maybe username exists)')
+      alert('Create failed (maybe username exists or invalid role)')
     }
   }
 
@@ -240,8 +243,6 @@ export default function Settings() {
   function removeBranch(list: string[], value: string) {
     return list.filter((x) => x !== value)
   }
-
-  const canManage = isAdmin
 
   return (
     <div className="space-y-6 p-6">
@@ -357,7 +358,7 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* User Management (Admin/HR only) */}
+      {/* Roles & Users (Admin/HR only) */}
       {isAdmin && (
         <div className="card">
           <div className="flex items-start justify-between gap-4">
@@ -366,7 +367,7 @@ export default function Settings() {
                 <div className="w-2 h-2 rounded-full bg-purple-500"></div>
                 <h3 className="font-semibold text-lg">User Management</h3>
               </div>
-              <p className="text-sm text-muted-foreground">Create users and assign permissions</p>
+              <p className="text-sm text-muted-foreground">Create users and assign roles/branches</p>
             </div>
             <button 
               className="px-4 py-2 bg-gradient-to-r from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 text-white rounded-lg font-medium shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200" 
@@ -376,7 +377,7 @@ export default function Settings() {
             </button>
           </div>
 
-          {/* Create new user */}
+          {/* Create new user (aka “create role for a user”) */}
           <div className="mt-6 p-6 bg-muted rounded-2xl border border-border">
             <div className="text-lg font-semibold mb-4">Create New User</div>
             <div className="grid md:grid-cols-2 gap-4">
