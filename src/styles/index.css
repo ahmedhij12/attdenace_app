@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light dark; }
+
+.card { @apply bg-white dark:bg-zinc-800 rounded-2xl shadow p-4; }
+.btn { @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl shadow text-sm font-medium bg-zinc-900 text-white hover:opacity-90 active:opacity-80 dark:bg-zinc-100 dark:text-zinc-900; }
+.btn-outline { @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 text-sm font-medium hover:bg-zinc-100 dark:hover:bg-zinc-700/40; }
+.input { @apply w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500; }
+.select { @apply w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500; }
+.table { @apply min-w-full text-sm; }
+.th, .td { @apply px-3 py-2 border-b border-zinc-200 dark:border-zinc-700; }
+.badge { @apply inline-block rounded-full px-2 py-0.5 text-xs bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-100; }
+.banner { @apply mb-3 p-3 rounded-xl bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-100 text-sm; }
+.metric { @apply card flex flex-col gap-1; }
+.metric .value { @apply text-2xl font-semibold; }
+.metric .label { @apply text-xs text-zinc-500 dark:text-zinc-300; }
+body { @apply text-zinc-900 dark:text-zinc-100; }

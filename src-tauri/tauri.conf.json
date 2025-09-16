@@ -1,0 +1,32 @@
+{
+  "productName": "Attendance Admin",
+  "version": "1.1.0",
+  "identifier": "com.basra.attendance.admin",
+  "build": {
+    "beforeDevCommand": "vite",
+    "beforeBuildCommand": "vite build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Attendance Admin",
+        "width": 1280,
+        "height": 820,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "targets": [
+      "msi",
+      "nsis"
+    ],
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
+    }
+  }
+}
