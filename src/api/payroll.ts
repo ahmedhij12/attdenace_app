@@ -1,4 +1,5 @@
 // src/api/payroll.ts
+import { useAuthStore } from '@/store/auth'
 
 export type PayrollTotals = {
   hours: number
@@ -42,11 +43,13 @@ export type Deduction = {
 }
 
 function getApiBase(): string {
-  try {
-    const s = (window as any)?.useAuthStore?.getState?.()
-    const b = s?.apiBase as string | undefined
-    if (b) return b.replace(/\/+$/, '')
-  } catch {}
+  const { apiBase } = useAuthStore.getState()
+  if (apiBase) {
+    const base = apiBase.startsWith('http')
+      ? apiBase
+      : window.location.origin + (apiBase.startsWith('/') ? '' : '/') + apiBase
+    return base.replace(/\/+$/, '')
+  }
   const env = (import.meta as any)?.env?.VITE_API_URL as string | undefined
   if (env) return env.replace(/\/+$/, '')
   const url = new URL(window.location.href)
@@ -55,19 +58,20 @@ function getApiBase(): string {
 }
 
 function tokenHeader() {
-  let t: string | undefined
-  try { t = (window as any)?.useAuthStore?.getState?.().token } catch {}
-  t = t || localStorage.getItem('jwt') || localStorage.getItem('token') ||
-      localStorage.getItem('auth_token') || localStorage.getItem('access_token') || ''
-  return t ? { Authorization: /^bearer\s/i.test(t) ? t : `Bearer ${t}` } : {}
+  const { token } = useAuthStore.getState()
+  if (!token) return {}
+  const auth = /^bearer\s/i.test(token) ? token : `Bearer ${token}`
+  return { Authorization: auth }
 }
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const text = await res.text()
+    let text = ''
+    try { text = await res.text() } catch {}
     throw new Error(text || `HTTP ${res.status}`)
   }
-  return res.json()
+  if (res.status === 204) return undefined as unknown as T
+  try { return await res.json() } catch { return undefined as unknown as T }
 }
 
 // ----------- Payroll -----------
@@ -75,31 +79,33 @@ export async function getPayroll(params: { from: string; to: string; branch?: st
   const q = new URLSearchParams()
   q.set('from', params.from)
   q.set('to', params.to)
-  if (params.branch) q.set('branch', params.branch)
+  const b = (params.branch || '').trim()
+  // ✅ critical: never send branch=All
+  if (b && b.toLowerCase() !== 'all') q.set('branch', b)
 
   const res = await fetch(`${getApiBase()}/payroll?${q.toString()}`, { headers: { ...tokenHeader() } })
   const arr: any[] = await handle<any[]>(res)
-  return (Array.isArray(arr) ? arr : []).map(r => {
-    const uid = String(r.uid || r?.meta?.uid || '').toUpperCase()
-    const t = r.totals || {}
+  return (Array.isArray(arr) ? arr : []).map((r: any) => {
+    const uid = String(r?.uid ?? r?.meta?.uid ?? '').toUpperCase()
+    const t = r?.totals ?? {}
     return {
       uid,
-      code: r.code ?? '',
-      name: r.name ?? '',
-      branch: r.branch ?? '',
-      nationality: String(r.nationality ?? '').toLowerCase(),
-      days: r.days || {},
+      code: r?.code ?? '',
+      name: r?.name ?? '',
+      branch: r?.branch ?? '',
+      nationality: String(r?.nationality ?? '').toLowerCase(),
+      days: r?.days ?? {},
       totals: {
-        hours: Number(t.hours ?? 0),
-        food_allowance_iqd: Number(t.food_allowance_iqd ?? 0),
-        other_allowance_iqd: Number(t.other_allowance_iqd ?? 0),
-        deductions_iqd: Number(t.deductions_iqd ?? 0),
-        late_penalty_iqd: Number(t.late_penalty_iqd ?? 0),
-        allowances_iqd: Number(t.allowances_iqd ?? 0),
-        base_salary_iqd: Number(t.base_salary_iqd ?? 0),
-        total_pay_iqd: Number(t.total_pay_iqd ?? 0),
+        hours: Number(t?.hours ?? 0),
+        food_allowance_iqd: Number(t?.food_allowance_iqd ?? 0),
+        other_allowance_iqd: Number(t?.other_allowance_iqd ?? 0),
+        deductions_iqd: Number(t?.deductions_iqd ?? 0),
+        late_penalty_iqd: Number(t?.late_penalty_iqd ?? 0),
+        allowances_iqd: Number(t?.allowances_iqd ?? 0),
+        base_salary_iqd: Number(t?.base_salary_iqd ?? 0),
+        total_pay_iqd: Number(t?.total_pay_iqd ?? 0),
       },
-      meta: r.meta,
+      meta: r?.meta,
     }
   })
 }

@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router-dom'
 type UserRow = {
   username: string
   email: string
-  role: 'admin' | 'manager'
+  role: 'admin' | 'manager' | 'hr'
   allowed_branches: string[]
 }
 
@@ -18,7 +18,8 @@ export default function Settings() {
 
   // me (to decide if admin)
   const [me, setMe] = useState<UserRow | null>(null)
-  const isAdmin = me?.role === 'admin'
+  // ✅ Show User Management for admin or HR (case-insensitive)
+  const isAdmin = ['admin','hr'].includes(((me?.role as any) || '').toString().toLowerCase())
 
   // Change password
   const [oldPw, setOldPw] = useState('')
@@ -89,18 +90,6 @@ export default function Settings() {
     if (!res.ok) throw new Error(`${res.status}`)
     return (await res.json()) as T
   }
-  async function download(path: string, filename?: string) {
-    const url = `${getApiBase()}${path}`
-    const token = getToken()
-    const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-    if (!res.ok) throw new Error(`Download failed (${res.status})`)
-    const blob = await res.blob()
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = filename || path.split('/').pop() || 'download.xlsx'
-    a.click()
-    URL.revokeObjectURL(a.href)
-  }
   // ------------------------------------------------
 
   function signOut() {
@@ -136,33 +125,16 @@ export default function Settings() {
     }
   }
 
-  // ----- Exports -----
-  function downloadEmployees() {
-    download('/exports/employees.xlsx', 'employees.xlsx').catch((e) => alert(e.message))
-  }
-  function downloadDailyToday() {
-    const t = new Date()
-    const dd = String(t.getDate()).padStart(2, '0')
-    const mm = String(t.getMonth() + 1).padStart(2, '0')
-    const yyyy = t.getFullYear()
-    download(`/exports/daily/${yyyy}-${mm}-${dd}.xlsx`, `attendance-${yyyy}-${mm}-${dd}.xlsx`).catch((e) =>
-      alert(e.message)
-    )
-  }
-  function downloadMonthly() {
-    const t = new Date()
-    const ym = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`
-    download(`/exports/monthly/${ym}.xlsx`, `attendance-${ym}.xlsx`).catch((e) => alert(e.message))
-  }
-
   // ----- Admin: load me/users/branches -----
   async function loadMe() {
     try {
       const data = await authed<UserRow>('/auth/me')
+      const raw = String((data as any).role ?? 'manager').toLowerCase().trim()
+      const norm = raw.includes('admin') ? 'admin' : raw.includes('hr') ? 'hr' : 'manager'
       setMe({
         username: data.username,
         email: data.email || '',
-        role: (data.role as any) || 'manager',
+        role: norm as any,
         allowed_branches: Array.isArray(data.allowed_branches) ? data.allowed_branches : [],
       })
     } catch {
@@ -200,7 +172,7 @@ export default function Settings() {
     }
   }, [isAdmin])
 
-  // ----- Admin: user actions (RESTORED) -----
+  // ----- Admin: user actions -----
   async function createUser() {
     if (!newUser.username || !newUserPassword) {
       alert('Username and password are required')
@@ -385,45 +357,8 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Data Exports */}
-      <div className="card">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-orange-500"></div>
-              <h3 className="font-semibold text-lg">Data Exports</h3>
-            </div>
-            <p className="text-sm text-muted-foreground">Download your data in Excel format</p>
-          </div>
-        </div>
-        
-        <div className="mt-6 flex gap-4 flex-wrap">
-          <button 
-            className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
-            onClick={downloadEmployees}
-          >
-            📊 Employees Report
-          </button>
-          <button 
-            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
-            onClick={downloadDailyToday}
-          >
-            📅 Today's Attendance
-          </button>
-          <button 
-            className="px-6 py-3 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
-            onClick={downloadMonthly}
-          >
-            📈 Monthly Report
-          </button>
-        </div>
-        <p className="text-xs text-muted-foreground mt-4 p-4 bg-muted rounded-lg">
-          💡 All downloads are securely authenticated with your credentials and work in both development and production environments.
-        </p>
-      </div>
-
-      {/* User Management (Admin only) */}
-      {canManage && (
+      {/* User Management (Admin/HR only) */}
+      {isAdmin && (
         <div className="card">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-2">
@@ -431,7 +366,7 @@ export default function Settings() {
                 <div className="w-2 h-2 rounded-full bg-purple-500"></div>
                 <h3 className="font-semibold text-lg">User Management</h3>
               </div>
-              <p className="text-sm text-muted-foreground">Manage system users and their permissions</p>
+              <p className="text-sm text-muted-foreground">Create users and assign permissions</p>
             </div>
             <button 
               className="px-4 py-2 bg-gradient-to-r from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 text-white rounded-lg font-medium shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200" 
@@ -474,8 +409,8 @@ export default function Settings() {
                   value={newUser.role} 
                   onChange={e => setNewUser({ ...newUser, role: e.target.value as any })}
                 >
-                  <option value="manager">👥 Manager (Read-only)</option>
-                  <option value="admin">🔑 Admin (Full Access)</option>
+                  <option value="manager">👥 Manager (Scoped)</option>
+                  <option value="admin">🔑 Admin (Full access)</option>
                 </select>
               </Field>
             </div>
@@ -579,7 +514,7 @@ function BranchPicker({
   }
   return (
     <div>
-      <div className="text-sm font-medium text-foreground mb-3">{label}</div>
+      {label && <div className="text-sm font-medium text-foreground mb-3">{label}</div>}
       <div className="flex items-center gap-3 mb-3">
         <input
           className="flex-1 px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all duration-200 text-foreground dark:[color-scheme:dark] placeholder:text-muted-foreground"
@@ -628,7 +563,7 @@ function UserRowItem({
   onDelete: (u: UserRow) => void
 }) {
   const [email, setEmail] = useState(u.email || '')
-  const [role, setRole] = useState<UserRow['role']>(u.role)
+  const [role, setRole] = useState<string>(u.role)
   const [branches, setBranches] = useState<string[]>(u.allowed_branches || [])
   const [pw, setPw] = useState('')
 
