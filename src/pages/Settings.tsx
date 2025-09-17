@@ -55,10 +55,17 @@ export default function Settings() {
   function getApiBase(): string {
     const env = (import.meta as any)?.env?.VITE_API_URL as string | undefined
     if (env) return env.replace(/\/+$/, '')
+
+    // 🔧 Fix: when running on the Pages app domain, talk to the API domain
+    const host = window.location.hostname
+    if (host === 'app.hijazionline.org') return 'https://api.hijazionline.org'
+
+    // dev / other cases (e.g., Vite on 5173)
     const url = new URL(window.location.href)
     const port = url.port === '5173' ? '8000' : url.port
     return `${url.protocol}//${url.hostname}${port ? ':' + port : ''}`
   }
+
   function getToken(): string {
     try {
       const s: any = (useAuthStore as any)?.getState?.()
@@ -79,6 +86,7 @@ export default function Settings() {
       )
     }
   }
+
   async function authed<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${getApiBase()}${path}`, {
       ...(init || {}),
@@ -144,6 +152,7 @@ export default function Settings() {
       // fall back to store role; UI gating already uses sessionRole
     }
   }
+
   async function loadUsers() {
     setLoadingUsers(true); setErrorUsers(null)
     try {
@@ -155,6 +164,7 @@ export default function Settings() {
       setLoadingUsers(false)
     }
   }
+
   async function loadBranchOptions() {
     try {
       const [emps, devs] = await Promise.all([api.getEmployees({}), api.getDevices()])
