@@ -12,3 +12,4 @@ src-tauri/target/
 Thumbs.db
 .vscode/
 .idea/
+.env
