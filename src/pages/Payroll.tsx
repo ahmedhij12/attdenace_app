@@ -1,13 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Download, RefreshCw, Calendar, Building2, Pencil, Trash2, PlusCircle } from 'lucide-react'
-import { BRANCHES } from '@/api/client'
-import {
-  getPayroll,
-  type PayrollRow,
-  listAdjustments, createAdjustment, updateAdjustment, deleteAdjustment,
-  listDeductions, createDeduction, updateDeduction, deleteDeduction
-} from '@/api/payroll'
+// src/pages/Payroll.tsx
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Download, RefreshCw, Calendar, Building2 } from 'lucide-react'
+
+import { getPayroll, type PayrollRow } from '@/api/payroll'
 import { useAuthStore } from '@/store/auth'
+import RoleBadge from "@/components/RoleBadge";
 
 const pad = (n:number) => String(n).padStart(2,'0')
 const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
@@ -20,7 +17,12 @@ const monthRange = (d = new Date()) => {
 export default function Payroll() {
   const role = useAuthStore(s => s.role?.toLowerCase?.() || 'manager')
   const allowed = role === 'admin' || role === 'hr'
+
   const [adoptedServerPeriod, setAdoptedServerPeriod] = useState(false)
+
+  // ▼▼ Branch options state (starts with "All")
+  const [branchOptions, setBranchOptions] = useState<string[]>(['All'])
+  // ▲▲
 
   const clientDefault = monthRange()
   const [from, setFrom] = useState(clientDefault.from)
@@ -30,18 +32,9 @@ export default function Payroll() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Manage "Other Allowance"
-  const [oaOpen, setOaOpen] = useState<{ uid: string, name: string } | null>(null)
-  const [oaList, setOaList] = useState<any[]>([])
-  const [oaNewAmount, setOaNewAmount] = useState<string>('0')
-  const [oaNewNote, setOaNewNote] = useState<string>('')
-
-  // Manage Deductions
-  const [dedOpen, setDedOpen] = useState<{ uid: string, name: string } | null>(null)
-  const [dedList, setDedList] = useState<any[]>([])
-  const [dedNewAmount, setDedNewAmount] = useState<string>('0')
-  const [dedNewDate, setDedNewDate] = useState<string>(clientDefault.from) // default to start of period
-  const [dedNewNote, setDedNewNote] = useState<string>('')
+  // --- De-dupe & stale-response guard (StrictMode-friendly) ---
+  const inflightKeyRef = useRef<string>('')      // current (from|to|branch) being loaded
+  const reqSeqRef = useRef(0)                    // increasing request sequence
 
   const days = useMemo(() => {
     const a = new Date(from + 'T00:00:00'), b = new Date(to + 'T00:00:00')
@@ -59,35 +52,119 @@ export default function Payroll() {
     return { employees, totalHours, totalPay, avgPay }
   }, [rows])
 
+  // ----------------------------
+  // Branch options (solve empty)
+  // ----------------------------
+
+  // 1) Primary source: GET /branches (with auth). Runs once.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const API_BASE: string = (() => {
+          const v =
+            (import.meta as any)?.env?.VITE_API_BASE_URL ??
+            (window as any)?.VITE_API_BASE_URL ?? '';
+          return typeof v === 'string' ? v : '';
+        })();
+        const token = localStorage.getItem('token') || sessionStorage.getItem('token') || ''
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+
+        const res = await fetch(`${API_BASE}/branches`, { headers });
+        if (!res.ok) return;
+
+        const data: unknown = await res.json();
+        const list: unknown[] = Array.isArray(data)
+          ? (data as unknown[])
+          : Array.isArray((data as any)?.items)
+          ? ((data as any).items as unknown[])
+          : [];
+
+        const cleaned: string[] = Array.from(
+          new Set(list.map((b) => String(b).trim()).filter((s) => s.length > 0))
+        ).sort();
+
+        if (!cancelled && cleaned.length) setBranchOptions(['All', ...cleaned]);
+      } catch {
+        // swallow — we'll try fallback #2
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // 2) Fallback: derive unique branch names from loaded rows (first successful load)
+  useEffect(() => {
+    if (branchOptions.length > 1) return     // already populated
+    if (!rows.length) return
+    const derived = Array.from(new Set(rows.map(r => String(r.branch || '').trim()).filter(Boolean))).sort()
+    if (derived.length) setBranchOptions(['All', ...derived])
+  }, [rows, branchOptions.length])
+
+  // Ensure the current selection exists; if not (e.g., list loaded later), fall back to All
+  useEffect(() => {
+    if (branch && !branchOptions.includes(branch)) setBranch('All')
+  }, [branchOptions])
+
   async function load() {
+    const key = `${from}|${to}|${branch}`
+
+    // If we already have an identical request in-flight, skip.
+    if (inflightKeyRef.current === key) return
+    inflightKeyRef.current = key
+
+    // Sequence for this particular invocation; used to ignore stale responses.
+    const mySeq = ++reqSeqRef.current
+
     try {
       setLoading(true); setError(null)
-      const data = await getPayroll({ from, to, branch })
+
+      const data = await getPayroll({
+        from,
+        to,
+        branch: branch === "All" ? undefined : branch,
+      })
+
+      // If another newer request started/finished, ignore this response.
+      if (reqSeqRef.current !== mySeq) return
+
       // Adopt server period once (from first row meta.period)
-      if (!adoptedServerPeriod && data?.length && data[0]?.meta?.period) {
-        const p = data[0].meta.period
+      if (!adoptedServerPeriod && data?.length && (data[0] as any)?.meta?.period) {
+        const p = (data[0] as any).meta.period
         const srvFrom = p?.from, srvTo = p?.to
-        if (typeof srvFrom === 'string' && typeof srvTo === 'string' && (srvFrom !== from || srvTo !== to)) {
-          setFrom(srvFrom); setTo(srvTo); setAdoptedServerPeriod(true)
-          // trigger reload after changing period
+        if ((srvFrom && srvFrom !== from) || (srvTo && srvTo !== to)) {
+          inflightKeyRef.current = '' // let next run proceed
+          setFrom(srvFrom ?? from)
+          setTo(srvTo ?? to)
+          setAdoptedServerPeriod(true)
           return
         }
         setAdoptedServerPeriod(true)
       }
+
       setRows(data)
     } catch (e:any) {
+      if (reqSeqRef.current !== mySeq) return // stale failure; ignore
       const msg = (e?.message || '').toLowerCase()
       if (msg.includes('not found') || msg.includes('404')) { setRows([]); setError(null) }
       else { setError(e?.message || 'Failed to load payroll'); setRows([]) }
-    } finally { setLoading(false) }
+    } finally {
+      if (reqSeqRef.current === mySeq) {
+        // only the active request clears its marker
+        inflightKeyRef.current = ''
+        setLoading(false)
+      }
+    }
   }
 
-  useEffect(() => { if (allowed) load() }, [from, to, branch, adoptedServerPeriod, allowed])
+  useEffect(() => {
+    if (allowed) load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to, branch, adoptedServerPeriod, allowed])
 
   function exportCSV() {
     const header = [
       'Code','Name','Branch','Nationality', ...days,
-      'Total Hours','Food Allowance','Other Allowance','Deductions','Late Penalty','Base Salary','Total Pay'
+      'Total Hours','Food Allowance','Other Allowance','Advances','Deductions','Late Coming','Base Salary','Total Pay'
     ]
     const lines = [header.join(',')]
     for (const r of rows) {
@@ -98,6 +175,7 @@ export default function Payroll() {
         t.hours ?? 0,
         t.food_allowance_iqd ?? 0,
         t.other_allowance_iqd ?? 0,
+        (t as any).advances_iqd ?? 0,      // ← read-only; shows 0 if API doesn't send it
         t.deductions_iqd ?? 0,
         t.late_penalty_iqd ?? 0,
         t.base_salary_iqd ?? 0,
@@ -111,133 +189,22 @@ export default function Payroll() {
     URL.revokeObjectURL(url)
   }
 
-  // ---------- Other Allowance modal helpers ----------
-  async function openOtherAllowance(uid: string, name: string) {
-    try {
-      setLoading(true)
-      const list = await listAdjustments(uid, from, to)
-      setOaList(list)
-      setOaOpen({ uid, name })
-      setOaNewAmount('0'); setOaNewNote('')
-    } catch (e:any) {
-      alert(e?.message || 'Failed to load other allowance entries')
-    } finally { setLoading(false) }
-  }
-
-  async function addOtherAllowance() {
-    if (!oaOpen?.uid) return
-    const amt = Number(oaNewAmount || '0')
-    if (Number.isNaN(amt)) return alert('Invalid amount')
-    try {
-      setLoading(true)
-      await createAdjustment({ uid: oaOpen.uid, from, to, amount_iqd: Math.round(amt), note: oaNewNote || undefined })
-      const list = await listAdjustments(oaOpen.uid, from, to)
-      setOaList(list)
-      await load()
-      setOaNewAmount('0'); setOaNewNote('')
-    } catch (e:any) {
-      alert(e?.message || 'Failed to add other allowance')
-    } finally { setLoading(false) }
-  }
-
-  async function saveOtherRow(id: number, amount_iqd: number, note: string) {
-    try {
-      setLoading(true)
-      await updateAdjustment(id, { amount_iqd: Math.round(amount_iqd), note })
-      if (oaOpen?.uid) {
-        const list = await listAdjustments(oaOpen.uid, from, to)
-        setOaList(list)
-      }
-      await load()
-    } catch (e:any) {
-      alert(e?.message || 'Failed to update other allowance')
-    } finally { setLoading(false) }
-  }
-
-  async function deleteOtherRow(id: number) {
-    if (!confirm('Delete this other allowance entry?')) return
-    try {
-      setLoading(true)
-      await deleteAdjustment(id)
-      if (oaOpen?.uid) {
-        const list = await listAdjustments(oaOpen.uid, from, to)
-        setOaList(list)
-      }
-      await load()
-    } catch (e:any) {
-      alert(e?.message || 'Failed to delete other allowance')
-    } finally { setLoading(false) }
-  }
-
-  // ---------- Deductions modal helpers ----------
-  async function openDeductions(uid: string, name: string) {
-    try {
-      setLoading(true)
-      const list = await listDeductions(uid, from, to)
-      setDedList(list)
-      setDedOpen({ uid, name })
-      setDedNewAmount('0')
-      setDedNewDate(from)
-      setDedNewNote('')
-    } catch (e:any) {
-      alert(e?.message || 'Failed to load deductions')
-    } finally { setLoading(false) }
-  }
-
-  async function addDeduction() {
-    if (!dedOpen?.uid) return
-    const amt = Number(dedNewAmount || '0')
-    if (Number.isNaN(amt)) return alert('Invalid amount')
-    if (!dedNewDate) return alert('Pick a date')
-    try {
-      setLoading(true)
-      await createDeduction({ uid: dedOpen.uid, date: dedNewDate, amount_iqd: Math.round(amt), note: dedNewNote || undefined })
-      const list = await listDeductions(dedOpen.uid, from, to)
-      setDedList(list)
-      await load()
-      setDedNewAmount('0'); setDedNewNote('')
-    } catch (e:any) {
-      alert(e?.message || 'Failed to add deduction')
-    } finally { setLoading(false) }
-  }
-
-  async function saveDedRow(id: number, date: string, amount_iqd: number, note: string) {
-    try {
-      setLoading(true)
-      await updateDeduction(id, { date, amount_iqd: Math.round(amount_iqd), note })
-      if (dedOpen?.uid) {
-        const list = await listDeductions(dedOpen.uid, from, to)
-        setDedList(list)
-      }
-      await load()
-    } catch (e:any) {
-      alert(e?.message || 'Failed to update deduction')
-    } finally { setLoading(false) }
-  }
-
-  async function deleteDedRow(id: number) {
-    if (!confirm('Delete this deduction entry?')) return
-    try {
-      setLoading(true)
-      await deleteDeduction(id)
-      if (dedOpen?.uid) {
-        const list = await listDeductions(dedOpen.uid, from, to)
-        setDedList(list)
-      }
-      await load()
-    } catch (e:any) {
-      alert(e?.message || 'Failed to delete deduction')
-    } finally { setLoading(false) }
-  }
-
   if (!allowed) {
     return (
       <div className="space-y-6 p-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Payroll</h1>
-          <p className="text-muted-foreground mt-1">Employee payroll management</p>
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Payroll</h1>
+            <p className="text-muted-foreground mt-1">Employee payroll management</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <RoleBadge />
+          </div>
         </div>
-        <div className="card">
+        
+        {/* Access Denied */}
+        <div className="rounded-2xl bg-zinc-900/5 dark:bg-zinc-800 p-6 shadow-sm card border border-border/50">
           <div className="flex flex-col items-center gap-4 py-12">
             <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/20 flex items-center justify-center">
               <svg className="w-8 h-8 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -260,25 +227,40 @@ export default function Payroll() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Payroll</h1>
-          <p className="text-muted-foreground mt-1">Employee payroll management and reporting</p>
+          <p className="text-muted-foreground mt-1">Employee payroll reporting</p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="px-3 py-1.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100">
-            {role.toUpperCase()}
-          </div>
+          <RoleBadge />
         </div>
       </div>
 
-      {/* Summary */}
+      {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <StatCard title="Employees" value={summary.employees} subtitle={`${branch !== 'All' ? branch : 'All branches'}`} />
-        <StatCard title="Total Hours" value={summary.totalHours.toLocaleString()} subtitle={`${days.length} days period`} />
-        <StatCard title="Total Payroll" value={`${summary.totalPay.toLocaleString()} IQD`} subtitle="Current period" />
-        <StatCard title="Average Pay" value={`${Math.round(summary.avgPay).toLocaleString()} IQD`} subtitle="Per employee" />
+        <StatCard 
+          title="Employees" 
+          value={summary.employees} 
+          subtitle={`${branch !== 'All' ? branch : 'All branches'}`} 
+        />
+        <StatCard 
+          title="Total Hours" 
+          value={summary.totalHours.toLocaleString()} 
+          subtitle={`${days.length} days period`} 
+        />
+        <StatCard 
+          title="Total Payroll" 
+          value={`${summary.totalPay.toLocaleString()}`}
+          subtitle="IQD"
+          status={summary.totalPay > 0 ? "success" : undefined}
+        />
+        <StatCard 
+          title="Average Pay" 
+          value={`${Math.round(summary.avgPay).toLocaleString()}`}
+          subtitle="IQD per employee" 
+        />
       </div>
 
-      {/* Controls */}
-      <div className="card">
+      {/* Filters Card */}
+      <div className="rounded-2xl bg-zinc-900/5 dark:bg-zinc-800 p-6 shadow-sm card border border-border/50 hover:shadow-md transition-shadow">
         <div className="flex items-start justify-between gap-4 mb-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
@@ -291,22 +273,50 @@ export default function Payroll() {
 
         <div className="flex flex-wrap items-end gap-4">
           <Field label="From Date" icon={<Calendar className="w-4 h-4" />}>
-            <input type="date" value={from} onChange={e => { setAdoptedServerPeriod(true); setFrom(e.target.value) }} className="input" />
+            <input 
+              type="date" 
+              value={from} 
+              onChange={e => { setAdoptedServerPeriod(true); setFrom(e.target.value) }} 
+              className="w-full px-3 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm hover:border-blue-300" 
+            />
           </Field>
           <Field label="To Date" icon={<Calendar className="w-4 h-4" />}>
-            <input type="date" value={to} onChange={e => { setAdoptedServerPeriod(true); setTo(e.target.value) }} className="input" />
+            <input 
+              type="date" 
+              value={to} 
+              onChange={e => { setAdoptedServerPeriod(true); setTo(e.target.value) }} 
+              className="w-full px-3 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm hover:border-blue-300" 
+            />
           </Field>
+
           <Field label="Branch" icon={<Building2 className="w-4 h-4" />}>
-            <select value={branch} onChange={e => setBranch(e.target.value)} className="input min-w-[160px]">
-              {BRANCHES.map(b => (<option key={b} value={b}>{b}</option>))}
+            <select
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              className="w-full px-3 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm min-w-[160px] hover:border-blue-300"
+            >
+              {branchOptions.map((b) => (
+                <option key={b} value={b}>
+                  {b === "All" ? "All branches" : b}
+                </option>
+              ))}
             </select>
           </Field>
+
           <div className="flex gap-2">
-            <button onClick={load} disabled={loading} className="btn-primary inline-flex items-center gap-2">
+            <button 
+              onClick={load} 
+              disabled={loading} 
+              className="px-6 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-slate-400 disabled:to-slate-500 disabled:cursor-not-allowed text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:transform-none transition-all duration-200 text-sm inline-flex items-center gap-2"
+            >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               {loading ? 'Loading...' : 'Reload'}
             </button>
-            <button onClick={exportCSV} disabled={!rows.length} className="btn inline-flex items-center gap-2">
+            <button 
+              onClick={exportCSV} 
+              disabled={!rows.length} 
+              className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 disabled:from-slate-400 disabled:to-slate-500 disabled:cursor-not-allowed text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:transform-none transition-all duration-200 text-sm inline-flex items-center gap-2"
+            >
               <Download className="w-4 h-4" />
               Export CSV
             </button>
@@ -314,8 +324,8 @@ export default function Payroll() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="card">
+      {/* Payroll Table */}
+      <div className="rounded-2xl bg-zinc-900/5 dark:bg-zinc-800 p-6 shadow-sm card border border-border/50 hover:shadow-md transition-shadow">
         <div className="flex items-start justify-between gap-4 mb-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
@@ -332,27 +342,95 @@ export default function Payroll() {
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-border/50">
-          <table className="w-full text-sm border-separate border-spacing-0">
+          <table className="w-full text-sm">
             <thead className="sticky top-0 z-10">
-              <tr className="bg-muted/50 border-b border-border/50">
-                <Th sticky className="bg-background border-r border-border/50">Code</Th>
-                <Th sticky className="bg-background border-r border-border/50">Name</Th>
-                <Th>Branch</Th>
-                <Th>Nationality</Th>
-                {days.map(d => (<Th key={d} center className="min-w-[50px]">{d.slice(-2)}</Th>))}
-                <Th center>Total Hours</Th>
-                <Th center>Food Allowance</Th>
-                <Th center>Other Allowance</Th>
-                <Th center>Deductions</Th>
-                <Th center>Late Coming Penalty</Th>
-                <Th center>Base Salary</Th>
-                <Th center className="font-semibold">Total Pay</Th>
+              <tr className="bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-700 border-b-2 border-slate-200 dark:border-slate-600">
+                <Th sticky className="bg-white dark:bg-slate-900 shadow-sm border-r border-slate-200 dark:border-slate-700">
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs">👤</span>
+                    <span>Code</span>
+                  </div>
+                </Th>
+                <Th sticky className="bg-white dark:bg-slate-900 shadow-sm border-r border-slate-200 dark:border-slate-700">
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs">📝</span>
+                    <span>Employee Name</span>
+                  </div>
+                </Th>
+                <Th>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs">🏢</span>
+                    <span>Branch</span>
+                  </div>
+                </Th>
+                <Th>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs">🌍</span>
+                    <span>Nationality</span>
+                  </div>
+                </Th>
+                {days.map(d => (
+                  <Th key={d} center className="min-w-[60px] bg-blue-50 dark:bg-blue-900/20">
+                    <div className="flex flex-col items-center">
+                      <span className="text-xs font-bold text-blue-600 dark:text-blue-400">{d.slice(-2)}</span>
+                      <span className="text-[10px] text-blue-500 dark:text-blue-300">Day</span>
+                    </div>
+                  </Th>
+                ))}
+                <Th center className="bg-green-50 dark:bg-green-900/20 border-l-2 border-green-200 dark:border-green-700">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">⏰</span>
+                    <span className="font-semibold text-green-700 dark:text-green-300">Total Hours</span>
+                  </div>
+                </Th>
+                <Th center className="bg-yellow-50 dark:bg-yellow-900/20">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">🍽️</span>
+                    <span className="text-yellow-700 dark:text-yellow-300">Food Allow.</span>
+                  </div>
+                </Th>
+                <Th center className="bg-purple-50 dark:bg-purple-900/20">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">💰</span>
+                    <span className="text-purple-700 dark:text-purple-300">Other Allow.</span>
+                  </div>
+                </Th>
+                <Th center className="bg-orange-50 dark:bg-orange-900/20">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">💳</span>
+                    <span className="text-orange-700 dark:text-orange-300">Advances</span>
+                  </div>
+                </Th>
+                <Th center className="bg-red-50 dark:bg-red-900/20">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">➖</span>
+                    <span className="text-red-700 dark:text-red-300">Deductions</span>
+                  </div>
+                </Th>
+                <Th center className="bg-pink-50 dark:bg-pink-900/20">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">⏱️</span>
+                    <span className="text-pink-700 dark:text-pink-300">Late Penalty</span>
+                  </div>
+                </Th>
+                <Th center className="bg-indigo-50 dark:bg-indigo-900/20">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">💼</span>
+                    <span className="text-indigo-700 dark:text-indigo-300">Base Salary</span>
+                  </div>
+                </Th>
+                <Th center className="bg-emerald-50 dark:bg-emerald-900/20 border-l-2 border-emerald-200 dark:border-emerald-700">
+                  <div className="flex flex-col items-center">
+                    <span className="text-xs">💎</span>
+                    <span className="font-bold text-emerald-700 dark:text-emerald-300">TOTAL PAY</span>
+                  </div>
+                </Th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={12 + days.length} className="px-6 py-12 text-center">
+                  <td colSpan={13 + days.length} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center gap-3">
                       <RefreshCw className="w-8 h-8 text-muted-foreground animate-spin" />
                       <p className="text-muted-foreground">Loading payroll data...</p>
@@ -361,7 +439,7 @@ export default function Payroll() {
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={12 + days.length} className="px-6 py-12 text-center">
+                  <td colSpan={13 + days.length} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center gap-3">
                       <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
                         <svg className="w-6 h-6 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -376,150 +454,91 @@ export default function Payroll() {
                   </td>
                 </tr>
               ) : (
-                rows.map((r, i) => (
-                  <tr key={i} className="hover:bg-muted/30 transition-colors border-b border-border/30">
-                    <Td sticky className="font-mono text-xs bg-background border-r border-border/50">{r.code ?? ''}</Td>
-                    <Td sticky className="font-medium bg-background border-r border-border/50">{r.name}</Td>
-                    <Td className="text-muted-foreground">{r.branch}</Td>
-                    <Td className="capitalize text-muted-foreground">{r.nationality}</Td>
-                    {days.map(d => (
-                      <Td key={d} center className="font-mono tabular-nums">
-                        <span className={`inline-flex items-center justify-center w-8 h-6 rounded text-xs font-medium ${
-                          (r.days?.[d] || 0) > 0 
-                            ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300' 
-                            : 'text-muted-foreground'
-                        }`}>{r.days?.[d] ?? 0}</span>
+                rows.map((r, i) => {
+                  const t = (r.totals || {}) as any
+                  return (
+                    <tr key={i} className="hover:bg-gradient-to-r hover:from-blue-50/50 hover:to-indigo-50/50 dark:hover:from-blue-900/10 dark:hover:to-indigo-900/10 transition-all duration-200 border-b border-slate-100 dark:border-slate-800">
+                      <Td sticky className="font-mono text-xs bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">{r.code ?? ''}</span>
+                        </div>
                       </Td>
-                    ))}
-                    <Td center className="font-mono tabular-nums font-medium">{r.totals?.hours ?? 0}</Td>
-                    <Td center className="font-mono tabular-nums">
-                      {(r.totals?.food_allowance_iqd ?? 0).toLocaleString()}
-                    </Td>
-                    <Td center className="font-mono tabular-nums">
-                      <div className="inline-flex items-center gap-2">
-                        {(r.totals?.other_allowance_iqd ?? 0).toLocaleString()}
-                        <button
-                          className="inline-flex items-center gap-1 text-xs underline opacity-70 hover:opacity-100"
-                          onClick={() => openOtherAllowance((r as any).uid || (r as any).meta?.uid || '', r.name)}
-                          title="Manage other allowances"
-                        >
-                          <Pencil className="w-3 h-3" /> Edit
-                        </button>
-                      </div>
-                    </Td>
-                    <Td center className="font-mono tabular-nums">
-                      <div className="inline-flex items-center gap-2">
-                        {(r.totals?.deductions_iqd ?? 0).toLocaleString()}
-                        <button
-                          className="inline-flex items-center gap-1 text-xs underline opacity-70 hover:opacity-100"
-                          onClick={() => openDeductions((r as any).uid || (r as any).meta?.uid || '', r.name)}
-                          title="Manage deductions"
-                        >
-                          <Pencil className="w-3 h-3" /> Edit
-                        </button>
-                      </div>
-                    </Td>
-                    <Td center className="font-mono tabular-nums">
-                      {(r.totals?.late_penalty_iqd ?? 0).toLocaleString()}
-                    </Td>
-                    <Td center className="font-mono tabular-nums">{(r.totals?.base_salary_iqd ?? 0).toLocaleString()}</Td>
-                    <Td center className="font-semibold font-mono tabular-nums">
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300">
-                        {(r.totals?.total_pay_iqd ?? 0).toLocaleString()} IQD
-                      </span>
-                    </Td>
-                  </tr>
-                ))
+                      <Td sticky className="font-medium bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+                            {r.name.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">{r.name}</span>
+                        </div>
+                      </Td>
+                      <Td className="text-slate-600 dark:text-slate-400">
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                          {r.branch}
+                        </span>
+                      </Td>
+                      <Td className="capitalize text-slate-600 dark:text-slate-400">
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                          {r.nationality}
+                        </span>
+                      </Td>
+                      {days.map(d => (
+                        <Td key={d} center className="font-mono tabular-nums bg-blue-50/30 dark:bg-blue-900/10">
+                          <span className={`inline-flex items-center justify-center w-8 h-6 rounded text-xs font-medium ${
+                            (r.days?.[d] || 0) > 0 
+                              ? 'bg-gradient-to-br from-green-400 to-emerald-500 text-white shadow-sm font-bold' 
+                              : 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
+                          }`}>{r.days?.[d] ?? 0}</span>
+                        </Td>
+                      ))}
+                      <Td center className="font-mono tabular-nums font-bold bg-green-50/30 dark:bg-green-900/10 border-l-2 border-green-200 dark:border-green-700">
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-sm">
+                          {t.hours ?? 0}h
+                        </span>
+                      </Td>
+                      <Td center className="font-mono tabular-nums bg-yellow-50/30 dark:bg-yellow-900/10">
+                        <span className="text-yellow-700 dark:text-yellow-300 font-semibold">
+                          {(t.food_allowance_iqd ?? 0).toLocaleString()}
+                        </span>
+                      </Td>
+                      <Td center className="font-mono tabular-nums bg-purple-50/30 dark:bg-purple-900/10">
+                        <span className="text-purple-700 dark:text-purple-300 font-semibold">
+                          {(t.other_allowance_iqd ?? 0).toLocaleString()}
+                        </span>
+                      </Td>
+                      <Td center className="font-mono tabular-nums bg-orange-50/30 dark:bg-orange-900/10">
+                        <span className="text-orange-700 dark:text-orange-300 font-semibold">
+                          {(t.advances_iqd ?? 0).toLocaleString()}
+                        </span>
+                      </Td>
+                      <Td center className="font-mono tabular-nums bg-red-50/30 dark:bg-red-900/10">
+                        <span className="text-red-700 dark:text-red-300 font-semibold">
+                          {(t.deductions_iqd ?? 0).toLocaleString()}
+                        </span>
+                      </Td>
+                      <Td center className="font-mono tabular-nums bg-pink-50/30 dark:bg-pink-900/10">
+                        <span className="text-pink-700 dark:text-pink-300 font-semibold">
+                          {(t.late_penalty_iqd ?? 0).toLocaleString()}
+                        </span>
+                      </Td>
+                      <Td center className="font-mono tabular-nums bg-indigo-50/30 dark:bg-indigo-900/10">
+                        <span className="text-indigo-700 dark:text-indigo-300 font-semibold">
+                          {(t.base_salary_iqd ?? 0).toLocaleString()}
+                        </span>
+                      </Td>
+                      <Td center className="font-semibold font-mono tabular-nums bg-emerald-50/30 dark:bg-emerald-900/10 border-l-2 border-emerald-200 dark:border-emerald-700">
+                        <span className="inline-flex items-center px-4 py-2 rounded-full text-sm font-bold bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-lg">
+                          💰 {(t.total_pay_iqd ?? 0).toLocaleString()} IQD
+                        </span>
+                      </Td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
-
-      {/* Other Allowance Manager */}
-      {oaOpen && (
-        <Modal onClose={() => setOaOpen(null)} title={`Other Allowances — ${oaOpen.name}`}>
-          <div className="space-y-4">
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <label className="text-sm text-muted-foreground">Amount (IQD)</label>
-                <input type="number" min={0} className="input w-full" value={oaNewAmount} onChange={e => setOaNewAmount(e.target.value)} />
-              </div>
-              <div className="flex-1">
-                <label className="text-sm text-muted-foreground">Note (optional)</label>
-                <input className="input w-full" value={oaNewNote} onChange={e => setOaNewNote(e.target.value)} />
-              </div>
-              <button className="btn-primary inline-flex items-center gap-2" onClick={addOtherAllowance}>
-                <PlusCircle className="w-4 h-4" /> Add
-              </button>
-            </div>
-
-            <div className="rounded-xl border border-border/50 overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <Th>Date From</Th>
-                    <Th>Date To</Th>
-                    <Th center>Amount</Th>
-                    <Th>Note</Th>
-                    <Th center>Actions</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {oaList.length === 0 ? (
-                    <tr><Td colSpan={5} className="text-center text-muted-foreground py-6">No entries</Td></tr>
-                  ) : oaList.map((a: any) => <OAItem key={a.id} item={a} onSave={saveOtherRow} onDelete={deleteOtherRow} />)}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Deductions Manager */}
-      {dedOpen && (
-        <Modal onClose={() => setDedOpen(null)} title={`Deductions — ${dedOpen.name}`}>
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="text-sm text-muted-foreground">Date</label>
-                <input type="date" className="input w-full" value={dedNewDate} onChange={e => setDedNewDate(e.target.value)} />
-              </div>
-              <div>
-                <label className="text-sm text-muted-foreground">Amount (IQD)</label>
-                <input type="number" min={0} className="input w-full" value={dedNewAmount} onChange={e => setDedNewAmount(e.target.value)} />
-              </div>
-              <div>
-                <label className="text-sm text-muted-foreground">Note (optional)</label>
-                <input className="input w-full" value={dedNewNote} onChange={e => setDedNewNote(e.target.value)} />
-              </div>
-            </div>
-            <div className="flex justify-end">
-              <button className="btn-primary inline-flex items-center gap-2" onClick={addDeduction}>
-                <PlusCircle className="w-4 h-4" /> Add
-              </button>
-            </div>
-
-            <div className="rounded-xl border border-border/50 overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <Th>Date</Th>
-                    <Th center>Amount</Th>
-                    <Th>Note</Th>
-                    <Th center>Actions</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dedList.length === 0 ? (
-                    <tr><Td colSpan={4} className="text-center text-muted-foreground py-6">No entries</Td></tr>
-                  ) : dedList.map((d: any) => <DedItem key={d.id} item={d} onSave={saveDedRow} onDelete={deleteDedRow} />)}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </Modal>
-      )}
     </div>
   )
 }
@@ -527,7 +546,7 @@ export default function Payroll() {
 function Field({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
-      <label className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+      <label className="flex items-center gap-2 text-xs font-medium text-foreground">
         {icon}{label}
       </label>
       {children}
@@ -535,9 +554,27 @@ function Field({ label, icon, children }: { label: string; icon?: React.ReactNod
   )
 }
 
-function StatCard({ title, value, subtitle }: { title: string; value: React.ReactNode; subtitle?: string }) {
+function StatCard({ 
+  title, 
+  value, 
+  subtitle, 
+  status 
+}: { 
+  title: string; 
+  value: React.ReactNode; 
+  subtitle?: string; 
+  status?: "success" | "warning" | "error"
+}) {
+  const statusColors = {
+    success: "border-green-200 dark:border-green-800",
+    warning: "border-yellow-200 dark:border-yellow-800", 
+    error: "border-red-200 dark:border-red-800",
+  };
+
   return (
-    <div className="rounded-2xl bg-muted/30 dark:bg-muted/20 p-6 shadow-sm border hover:shadow-md transition-shadow border-border/50">
+    <div className={`rounded-2xl bg-zinc-900/5 dark:bg-zinc-800 p-6 shadow-sm card border hover:shadow-md transition-shadow ${
+      status ? statusColors[status] : "border-border/50"
+    }`}>
       <div className="text-sm text-muted-foreground font-medium">{title}</div>
       <div className="mt-2 text-3xl font-bold tracking-tight">{value}</div>
       {subtitle && <div className="mt-1 text-xs text-muted-foreground">{subtitle}</div>}
@@ -547,94 +584,12 @@ function StatCard({ title, value, subtitle }: { title: string; value: React.Reac
 
 function Th({ children, center, sticky, className = '' }: { children: React.ReactNode; center?: boolean; sticky?: boolean; className?: string }) {
   return (
-    <th className={`px-3 py-3 whitespace-nowrap font-medium text-muted-foreground text-xs uppercase tracking-wide ${sticky ? 'sticky left-0 z-20' : ''} ${center ? 'text-center' : 'text-left'} ${className}`} style={sticky ? { minWidth: 140 } : undefined}>{children}</th>
+    <th className={`px-4 py-4 whitespace-nowrap font-bold text-slate-700 dark:text-slate-300 text-xs uppercase tracking-wide ${sticky ? 'sticky left-0 z-20' : ''} ${center ? 'text-center' : 'text-left'} ${className}`} style={sticky ? { minWidth: 180 } : undefined}>{children}</th>
   )
 }
+
 function Td({ children, center, sticky, className = '', colSpan }: { children: React.ReactNode; center?: boolean; sticky?: boolean; className?: string; colSpan?: number }) {
   return (
-    <td className={`px-3 py-3 ${sticky ? 'sticky left-0 z-10' : ''} ${center ? 'text-center' : ''} ${className}`} style={sticky ? { minWidth: 180 } : undefined} colSpan={colSpan}>{children}</td>
-  )
-}
-
-/** Generic modal shell */
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-4 z-50">
-      <div className="bg-background rounded-2xl border border-border shadow-2xl w-full max-w-3xl p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="text-lg font-semibold">{title}</div>
-          <button className="btn" onClick={onClose}>Close</button>
-        </div>
-        {children}
-      </div>
-    </div>
-  )
-}
-
-/** Row item for Other Allowance list with inline edit/delete */
-function OAItem({ item, onSave, onDelete }: { item: any; onSave: (id: number, amount_iqd: number, note: string) => void; onDelete: (id: number) => void }) {
-  const [amt, setAmt] = useState<string>(String(item.amount_iqd ?? 0))
-  const [note, setNote] = useState<string>(item.note ?? '')
-  const [saving, setSaving] = useState(false)
-  return (
-    <tr className="border-b border-border/30">
-      <Td>{item.date_from}</Td>
-      <Td>{item.date_to}</Td>
-      <Td center>
-        <input type="number" className="input w-40 text-center" value={amt} onChange={e => setAmt(e.target.value)} />
-      </Td>
-      <Td>
-        <input className="input w-full" value={note} onChange={e => setNote(e.target.value)} />
-      </Td>
-      <Td center>
-        <div className="inline-flex gap-2">
-          <button
-            className="btn-primary px-2 py-1 text-xs"
-            disabled={saving}
-            onClick={async () => { setSaving(true); await onSave(item.id, Number(amt || 0), note); setSaving(false) }}
-          >
-            Save
-          </button>
-          <button className="btn px-2 py-1 text-xs inline-flex items-center gap-1" onClick={() => onDelete(item.id)}>
-            <Trash2 className="w-3 h-3" /> Delete
-          </button>
-        </div>
-      </Td>
-    </tr>
-  )
-}
-
-/** Row item for Deductions list with inline edit/delete */
-function DedItem({ item, onSave, onDelete }: { item: any; onSave: (id: number, date: string, amount_iqd: number, note: string) => void; onDelete: (id: number) => void }) {
-  const [date, setDate] = useState<string>(item.date)
-  const [amt, setAmt] = useState<string>(String(item.amount_iqd ?? 0))
-  const [note, setNote] = useState<string>(item.note ?? '')
-  const [saving, setSaving] = useState(false)
-  return (
-    <tr className="border-b border-border/30">
-      <Td>
-        <input type="date" className="input w-40" value={date} onChange={e => setDate(e.target.value)} />
-      </Td>
-      <Td center>
-        <input type="number" className="input w-40 text-center" value={amt} onChange={e => setAmt(e.target.value)} />
-      </Td>
-      <Td>
-        <input className="input w-full" value={note} onChange={e => setNote(e.target.value)} />
-      </Td>
-      <Td center>
-        <div className="inline-flex gap-2">
-          <button
-            className="btn-primary px-2 py-1 text-xs"
-            disabled={saving}
-            onClick={async () => { setSaving(true); await onSave(item.id, date, Number(amt || 0), note); setSaving(false) }}
-          >
-            Save
-          </button>
-          <button className="btn px-2 py-1 text-xs inline-flex items-center gap-1" onClick={() => onDelete(item.id)}>
-            <Trash2 className="w-3 h-3" /> Delete
-          </button>
-        </div>
-      </Td>
-    </tr>
+    <td className={`px-4 py-4 ${sticky ? 'sticky left-0 z-10' : ''} ${center ? 'text-center' : ''} ${className}`} style={sticky ? { minWidth: 200 } : undefined} colSpan={colSpan}>{children}</td>
   )
 }

@@ -2,8 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { BRANCHES } from '@/api/client'
 import type { DeviceInfo } from '@/types/models'
 import { useAuthStore } from '@/store/auth'
+import RoleBadge from "@/components/RoleBadge";
 
-type Me = { username: string; email: string; role: 'admin'|'manager'|string; allowed_branches: string[] }
+
+type Me = {
+  username: string;
+  email: string;
+  role: string;
+  branch?: string;               // ← add branch
+  allowed_branches: string[];
+}
 
 export default function Devices() {
   const [rows, setRows] = useState<DeviceInfo[]>([])
@@ -24,6 +32,10 @@ export default function Devices() {
   const [me, setMe] = useState<Me|null>(null)
   const isManager = (me?.role || '').toLowerCase() === 'manager'
   const allowed = useMemo(()=> me?.allowed_branches ?? [], [me])
+  const isAccountant = (me?.role || '').toLowerCase() === 'accountant'
+  const canManage = !isManager;  // admin & hr only
+
+
 
   // ---------- infra ----------
   function getApiBase(): string {
@@ -38,13 +50,18 @@ export default function Devices() {
     const port = url.port === '5173' ? '8000' : url.port
     return `${url.protocol}//${url.hostname}${port ? ':' + port : ''}`
   }
-  function tokenHeader() {
-    let t: string | undefined
-    try { t = (useAuthStore as any)?.getState?.().token } catch {}
-    t = t || localStorage.getItem('jwt') || localStorage.getItem('token') ||
-        localStorage.getItem('auth_token') || localStorage.getItem('access_token') || ''
-    return t ? { Authorization: /^bearer\s/i.test(t) ? t : `Bearer ${t}` } : {}
-  }
+  function tokenHeader(): HeadersInit {
+  const t =
+    localStorage.getItem("jwt") ||
+    localStorage.getItem("token") ||
+    localStorage.getItem("auth_token") ||
+    localStorage.getItem("access_token") ||
+    "";
+  const headers: Record<string, string> = {};
+  if (t) headers.Authorization = /^bearer/i.test(t) ? t : `Bearer ${t}`;
+  return headers;
+}
+
   async function handle<T>(res: Response): Promise<T> {
     if (!res.ok) {
       const text = await res.text().catch(()=> '')
@@ -108,22 +125,41 @@ export default function Devices() {
     if (!res.ok) throw new Error(await res.text().catch(()=> 'Failed to delete device'))
   }
 
-  // ---------- user profile ----------
-  function normalizeMe(d:any):Me{
-    const role = String(d?.role || d?.user?.role || 'manager').toLowerCase()
-    const raw = Array.isArray(d?.allowed_branches) ? d.allowed_branches
-              : Array.isArray(d?.branch_ids) ? d.branch_ids
-              : Array.isArray(d?.branches) ? d.branches
-              : Array.isArray(d?.allowedBranches) ? d.allowedBranches : []
-    const allowed_branches = Array.from(new Set(raw.map((b:any)=>String(b)).filter(Boolean)))
-    return { username: d?.username || '', email: d?.email || '', role, allowed_branches }
-  }
-  async function loadMe() {
-    try {
-      const res = await fetch(`${getApiBase()}/auth/me`, { headers: tokenHeader() })
-      if (res.ok) setMe(normalizeMe(await res.json()))
-    } catch {}
-  }
+  /// -------- user profile --------
+/// -------- user profile --------
+function normalizeMe(d: any): Me {
+  const role = String(d?.role || d?.user?.role || "manager").toLowerCase();
+
+  // Accept any of the shapes the API may return
+  const raw: unknown[] =
+    (Array.isArray(d?.allowed_branches) && d.allowed_branches) ||
+    (Array.isArray(d?.branch_ids) && d.branch_ids) ||
+    (Array.isArray(d?.branches) && d.branches) ||
+    (Array.isArray(d?.allowedBranches) && d.allowedBranches) ||
+    [];
+
+  // Normalize to string[] and dedupe
+  const allowed_branches: string[] = Array.from(
+    new Set(
+      (raw as unknown[])
+        .map((b) => String(b))
+        .filter((s): s is string => !!s && s.length > 0)
+    )
+  );
+
+  const branch =
+    String(d?.branch || d?.user?.branch || d?.branch_name || "").trim() || undefined;
+
+  return {
+    username: d?.username || "",
+    email: d?.email || "",
+    role,
+    branch,              // ← keep manager’s single branch for fallback
+    allowed_branches,
+  };
+}
+
+
 
   const uniq = (arr: string[]) =>
     Array.from(new Set(arr.map(s => String(s).trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b))
@@ -152,17 +188,49 @@ export default function Devices() {
     setLoading(true); setError(null)
     try {
       const data = await apiGetDevices()
-      const scoped = (isManager && allowed.length)
-        ? data.filter(d => allowed.includes(String(d.branch ?? '')))
+
+      const norm = (s: any) => String(s ?? '').trim().toLowerCase()
+      const mgrBranch = norm(me?.branch)
+      const allowedNorm = (me?.allowed_branches ?? []).map(norm)
+
+      const scoped =
+        isManager
+         ? (
+              allowedNorm.length > 0
+                ? data.filter(d => allowedNorm.includes(norm(d.branch)))
+                : (mgrBranch ? data.filter(d => norm(d.branch) === mgrBranch) : data)
+          )
         : data
-      setRows(scoped)
+
+setRows(scoped)
+
+
     } catch (e:any) {
       setError(e?.message ?? 'Failed to load devices')
     } finally { setLoading(false) }
   }
 
-  useEffect(() => { loadMe() }, [])
-  useEffect(() => { load(); loadOptions() }, [me?.role, JSON.stringify(allowed)])
+  useEffect(() => {
+  let active = true;
+  (async () => {
+    try {
+      const res = await fetch(`${getApiBase()}/auth/me`, {
+        headers: tokenHeader() as HeadersInit,
+      });
+      if (!active) return;
+      if (res.ok) setMe(normalizeMe(await res.json()));
+    } catch {}
+  })();
+  return () => {
+    active = false;
+  };
+}, []);
+
+// reload devices & options when role/allowed branches change
+useEffect(() => {
+  load();
+  loadOptions();
+}, [me?.role, JSON.stringify(allowed)]);
 
   async function createDevice(e: React.FormEvent) {
     e.preventDefault()
@@ -194,36 +262,43 @@ export default function Devices() {
     finally { setLoading(false) }
   }
 
+  if (isAccountant) {
+  return (
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Devices</h1>
+        <p className="text-muted-foreground mt-1">Attendance devices</p>
+      </div>
+      <div className="card py-12 text-center text-sm">
+        Access denied. This page is disabled for the Accountant role.
+      </div>
+    </div>
+  )
+}
+
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Device Management</h1>
-          <p className="text-muted-foreground mt-1">Monitor and manage your connected devices</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${
-            isManager 
-              ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100' 
-              : 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100'
-          }`}>
-            {isManager ? 'Manager View' : 'Admin Access'}
-          </div>
-          <button 
-            className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
-            onClick={() => { 
-              if (isManager) { 
-                alert('Read-only role: managers cannot add devices.'); 
-                return 
-              } 
-              setShow(true) 
-            }}
-          >
-            Add New Device
-          </button>
-        </div>
-      </div>
+<div className="flex items-center justify-between">
+  <div>
+    <h1 className="text-3xl font-bold tracking-tight">Device Management</h1>
+    <p className="text-muted-foreground mt-1">Monitor and manage your connected devices</p>
+  </div>
+
+  <div className="flex items-center gap-3">
+    {/* Unified role label: 'admin' for admin/HR, 'manager' otherwise */}
+    <RoleBadge />
+    {!isManager && (
+    <button
+      className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+      onClick={() => setShow(true)}
+    >
+      Add New Device
+    </button>
+    )}
+  </div>
+</div>
+
 
       {error && (
         <div className="bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-6 py-4 rounded-2xl shadow-lg">
@@ -258,14 +333,15 @@ export default function Devices() {
                 <th className="px-3 py-2 font-medium">Port</th>
                 <th className="px-3 py-2 font-medium">IP Address</th>
                 <th className="px-3 py-2 font-medium">Last Seen</th>
-                <th className="px-3 py-2 font-medium text-right">Actions</th>
+                {!isManager && <th className="px-3 py-2 font-medium text-right">Actions</th>}
+
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="px-3 py-8 text-center text-muted-foreground" colSpan={9}>Loading devices...</td></tr>
+                <tr><td className="px-3 py-8 text-center text-muted-foreground" colSpan={!isManager ? 9 : 8}>Loading devices...</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td className="px-3 py-8 text-center text-muted-foreground" colSpan={9}>
+                <tr><td className="px-3 py-8 text-center text-muted-foreground" colSpan={!isManager ? 9 : 8}>
                   <div className="flex flex-col items-center gap-2">
                     <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center">📱</div>
                     No devices found
@@ -298,20 +374,16 @@ export default function Devices() {
                     <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{d.port || '-'}</td>
                     <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{d.ip || '-'}</td>
                     <td className="px-3 py-3 text-xs text-muted-foreground">{d.lastSeen ? new Date(d.lastSeen).toLocaleString() : '-'}</td>
+                    {!isManager && (
                     <td className="px-3 py-3 text-right space-x-2">
                       <button 
                         className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-lg text-xs font-medium shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
-                        onClick={() => regen(d.id)}
-                      >
-                        🔄 Regen
-                      </button>
+                        onClick={() => regen(d.id)}>🔄 Regen</button>
                       <button 
                         className="px-3 py-1.5 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white rounded-lg text-xs font-medium shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
-                        onClick={() => remove(d.id)}
-                      >
-                        Delete
-                      </button>
+                        onClick={() => remove(d.id)}>Delete</button>
                     </td>
+                    )}
                   </tr>
                 ))
               )}

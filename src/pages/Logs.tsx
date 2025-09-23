@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, BRANCHES } from '@/api/client'
 import type { AttendanceLog, DeviceInfo } from '@/types/models'
+import RoleBadge from "@/components/RoleBadge";
+
 
 const LS_KEY = 'logs.filters.v16'
 
@@ -11,6 +13,8 @@ export default function Logs() {
   // me
   const [me, setMe] = useState<Me|null>(null)
   const isAdmin = (me?.role || 'admin').toLowerCase() === 'admin'
+  const allowed = (me?.role || 'manager').toLowerCase() !== 'accountant'
+
 
   // filters (YYYY-MM-DD)
   const [from, setFrom] = useState<string>('')
@@ -133,7 +137,10 @@ export default function Logs() {
     return { username: d?.username || '', email: d?.email || '', role, allowed_branches: raw }
   }
   useEffect(() => { (async()=>{ try{ const r = await fetch(`${getApiBase()}/auth/me`, { headers: tokenHeader() }); if(r.ok) setMe(normalizeMe(await r.json())) }catch{}})() }, [])
-
+    useEffect(() => {
+  setPage(1);
+    }, [from, to, branch, deviceKey, query]);
+    
   // ---------- fetch with single-day fallback ----------
   async function fetchAll(opts?: { f?: string; t?: string }) {
     const fStr = opts?.f ?? from
@@ -156,17 +163,24 @@ export default function Logs() {
       // final fallback: fetch all, we'll filter on client
       attempts.push({})
 
-      let base: any[] = []
-      for (const params of attempts) {
-        const raw = await api.getLogs(params)
-        base = Array.isArray(raw) ? raw : (raw?.items ?? [])
-        if (base.length > 0 || (params && Object.keys(params).length === 0)) break
-      }
+      // ---- fetch base logs with fallback attempts ----
+type LogsResponse = any[] | { items?: any[] };
 
-      const [employees, devs] = await Promise.all([
-        api.getEmployees({}),
-        api.getDevices(),
-      ])
+let base: any[] = [];
+for (const params of attempts) {
+  // cast to union so TS allows either [] or { items: [] }
+  const raw = (await (api as any).getLogs(params)) as LogsResponse;
+  const list = Array.isArray(raw) ? raw : (raw?.items ?? []);
+  base = Array.isArray(list) ? list : [];
+  if (base.length > 0 || (params && Object.keys(params).length === 0)) break;
+}
+
+// ---- fetch employees + devices in parallel ----
+const [employees, devs] = await Promise.all([
+  (api as any).getEmployees ? (api as any).getEmployees({}) : Promise.resolve([]),
+  (api as any).getDevices ? (api as any).getDevices({}) : Promise.resolve([]),
+]);
+
 
       const byUid: Record<string, string> = {}; const byCode: Record<string, string> = {}
       for (const e of (employees as any[])) {
@@ -285,11 +299,16 @@ export default function Logs() {
 
   function exportCSV() {
     const header = ['Time', 'Date', 'Name', 'UID', 'Event', 'Code', 'Branch', 'Device']
-    const rows = filtered.map((r: any) => [
-      r.timeText, r.dateText, r.name, r.uid, r.event, r.code ?? '',
-      empBranchByUid[r.uid] ?? empBranchByCode[r.code] ?? r.branch ?? '',
-      deviceBranchOf(r) ? `${deviceNameOf(r)} (${deviceBranchOf(r)})` : deviceNameOf(r),
-    ])
+const rows = filtered.map((r: any) => [
+  r.timeText,
+  r.dateText,
+  r.name ?? r.uid ?? '',
+  r.uid ?? '',
+  r.event,
+  r.code ?? r.uid ?? '',
+  empBranchByUid[r.uid] ?? empBranchByCode[r.code] ?? r.branch ?? '',
+  deviceBranchOf(r) ? `${deviceNameOf(r)} (${deviceBranchOf(r)})` : deviceNameOf(r),
+])
     const csv = [header, ...rows]
       .map(line => line.map(v => '"' + String(v ?? '').replace(/"/g,'""') + '"').join(','))
       .join('\n')
@@ -340,20 +359,35 @@ export default function Logs() {
     )
   }
 
+  if (me && !allowed) {
+  return (
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Logs</h1>
+        <p className="text-muted-foreground mt-1">Attendance logs</p>
+      </div>
+      <div className="card py-12 text-center text-sm">
+        Access denied. This page is disabled for the Accountant role.
+      </div>
+    </div>
+  )
+}
+
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Attendance Logs</h1>
-          <p className="text-muted-foreground mt-1">View and filter attendance records</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${isAdmin ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100'}`}>
-            {isAdmin ? 'Admin Access' : 'Manager View'}
-          </div>
-        </div>
-      </div>
+<div className="flex items-center justify-between">
+  <div>
+    <h1 className="text-3xl font-bold tracking-tight">Attendance Logs</h1>
+    <p className="text-muted-foreground mt-1">View and filter attendance records</p>
+  </div>
+
+  <div className="flex items-center gap-3">
+    {/* Unified role label: 'admin' for admin/HR, 'manager' otherwise */}
+    <RoleBadge />
+  </div>
+</div>
+
 
       {/* Filters */}
       <div className="card">
@@ -466,8 +500,8 @@ export default function Logs() {
                   <tr key={String(r.id ?? i)} className="hover:bg-muted/50 transition-colors border-b border-border/50">
                     <td className="px-3 py-3 font-mono text-xs">{r.timeText}</td>
                     <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{r.dateText}</td>
-                    <td className="px-3 py-3 font-medium">{r.name}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{r.uid}</td>
+                    <td className="px-3 py-3 font-medium">{r.name || r.uid || ''}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{r.uid || ''}</td>
                     <td className="px-3 py-3">
                       <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                         r.event === 'in' 
@@ -479,14 +513,16 @@ export default function Logs() {
                         {r.event}
                       </span>
                     </td>
-                    <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{r.code ?? ''}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{r.code ?? r.uid ?? ''}</td>
                     <td className="px-3 py-3">
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300">
                         {empBranchByUid[r.uid] ?? empBranchByCode[r.code] ?? r.branch ?? ''}
                       </span>
                     </td>
                     <td className="px-3 py-3 text-xs text-muted-foreground">
-                      {String(deviceBranchOf(r) || empBranchByUid[r.uid] || empBranchByCode[r.code] || r.branch || '')}
+                      {deviceNameOf(r)
+                        ? (deviceBranchOf(r) ? `${deviceNameOf(r)} (${deviceBranchOf(r)})` : deviceNameOf(r))
+                        : ''}
                     </td>
                   </tr>
                 ))
