@@ -3,13 +3,23 @@ import React, { useEffect, useState } from 'react'
 import { useAuthStore } from '@/store/auth'
 import { api } from '@/api/client'
 import { useNavigate } from 'react-router-dom'
+import RoleBadge from "@/components/RoleBadge";
 
 type UserRow = {
   username: string
   email: string
-  role: 'admin' | 'manager' | 'hr'
+  role: 'admin' | 'manager' | 'hr' | 'accountant'
   allowed_branches: string[]
 }
+type RoleOption = "admin" | "manager" | "hr" | "accountant";
+
+const toRole = (r: unknown): RoleOption => {
+  const x = String(r ?? "").toLowerCase().trim();
+  if (x.startsWith("admin")) return "admin";
+  if (x === "hr" || x.startsWith("humanresources")) return "hr";
+  if (x === "accountant" || x.startsWith("account")) return "accountant";
+  return "manager";
+};
 
 export default function Settings() {
   const theme = useAuthStore((s) => s.theme)
@@ -17,12 +27,12 @@ export default function Settings() {
   const sessionRole = useAuthStore((s) => (s as any).role) as string | undefined
   const navigate = useNavigate()
 
-  // me (to decide if admin)
   const [me, setMe] = useState<UserRow | null>(null)
-  // ✅ Show User Management for admin/HR; also trust store role so the block never disappears
-  const isAdmin = ['admin', 'hr'].includes(
-    ((me?.role as any) || sessionRole || '').toString().toLowerCase()
-  )
+  const isAdmin = ((me?.role as any) || sessionRole || '').toString().toLowerCase() === 'admin';
+
+const role = useAuthStore(s => s.role?.toLowerCase?.() || 'manager');
+const logout = useAuthStore(s => s.logout); // if you have it
+
 
   // Change password
   const [oldPw, setOldPw] = useState('')
@@ -40,12 +50,17 @@ export default function Settings() {
   const [branchOptions, setBranchOptions] = useState<string[]>([])
 
   // create user form
-  const [newUser, setNewUser] = useState<UserRow>({
-    username: '',
-    email: '',
-    role: 'manager',
-    allowed_branches: [],
-  } as any)
+  const [newUser, setNewUser] = useState<{
+  username: string;
+  email: string;
+  role: RoleOption;
+  allowed_branches: string[];
+}>({
+  username: '',
+  email: '',
+  role: 'manager',
+  allowed_branches: [],
+});
   const [newUserPassword, setNewUserPassword] = useState('')
 
   const validPw =
@@ -53,18 +68,21 @@ export default function Settings() {
 
   // ---------- helpers: API base + token ----------
   function getApiBase(): string {
-    const env = (import.meta as any)?.env?.VITE_API_URL as string | undefined
-    if (env) return env.replace(/\/+$/, '')
+  // 1) Prefer store (most reliable)
+  const st: any = (useAuthStore as any)?.getState?.()
+  const fromStore = st?.apiBase
+  if (fromStore) return String(fromStore).replace(/\/+$/, '')
 
-    // 🔧 Fix: when running on the Pages app domain, talk to the API domain
-    const host = window.location.hostname
-    if (host === 'app.hijazionline.org') return 'https://api.hijazionline.org'
+  // 2) .env override
+  const env = (import.meta as any)?.env?.VITE_API_URL as string | undefined
+  if (env) return env.replace(/\/+$/, '')
 
-    // dev / other cases (e.g., Vite on 5173)
-    const url = new URL(window.location.href)
-    const port = url.port === '5173' ? '8000' : url.port
-    return `${url.protocol}//${url.hostname}${port ? ':' + port : ''}`
-  }
+  // 3) Local dev fallback: map common Vite ports to FastAPI 8000
+  const u = new URL(window.location.href)
+  const devPorts = new Set(['5173', '5174', '5175', '5137'])
+  const port = devPorts.has(u.port) ? '8000' : u.port
+  return `${u.protocol}//${u.hostname}${port ? ':' + port : ''}`
+}
 
   function getToken(): string {
     try {
@@ -88,17 +106,33 @@ export default function Settings() {
   }
 
   async function authed<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${getApiBase()}${path}`, {
-      ...(init || {}),
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init?.headers || {}),
-        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-      },
-    })
-    if (!res.ok) throw new Error(`${res.status}`)
-    return (await res.json()) as T
+  const st: any = (useAuthStore as any)?.getState?.()
+  const raw =
+    st?.token ||
+    st?.accessToken ||
+    localStorage.getItem('token') ||
+    localStorage.getItem('jwt') ||
+    localStorage.getItem('auth_token') ||
+    localStorage.getItem('access_token') ||
+    ''
+  const auth = raw ? (raw.startsWith('Bearer ') ? raw : `Bearer ${raw}`) : ''
+
+  const res = await fetch(`${getApiBase()}${path}`, {
+    ...(init || {}),
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(init?.headers || {}),
+      ...(auth ? { Authorization: auth } : {}),
+    },
+  })
+  if (!res.ok) {
+    const t = await res.text()
+    throw new Error(`${res.status} ${t || res.statusText}`)
   }
+  return (await res.json()) as T
+}
+
   // ------------------------------------------------
 
   function signOut() {
@@ -109,30 +143,33 @@ export default function Settings() {
     navigate('/login', { replace: true })
   }
 
-  // ----- Change password -----
   async function changePw() {
-    if (!validPw || busy) return
-    setBusy(true)
-    setMsg('')
-    try {
-      await api.changePassword(oldPw, newPw)
-      setMsg('✅ Password updated. You will be signed out...')
-      setOldPw(''); setNewPw(''); setConfirmPw('')
-      setTimeout(() => {
-        try {
-          (useAuthStore as any).getState().setSession('', '', '')
-          localStorage.removeItem('token')
-          localStorage.removeItem('auth_token')
-          localStorage.removeItem('access_token')
-        } catch {}
-        navigate('/login', { replace: true })
-      }, 900)
-    } catch (e: any) {
-      setMsg('❌ ' + (e?.message || 'Failed to update password'))
-    } finally {
-      setBusy(false)
-    }
+  if (!validPw || busy) return;
+  setBusy(true);
+  setMsg('');
+  try {
+    await authed('/auth/change_password', {
+      method: 'POST',
+      body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
+    });
+    setMsg('✅ Password updated. You will be signed out...');
+    setOldPw(''); setNewPw(''); setConfirmPw('');
+    setTimeout(() => {
+      try {
+        (useAuthStore as any).getState().setSession('', '', '');
+        localStorage.removeItem('token');
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('access_token');
+      } catch {}
+      navigate('/login', { replace: true });
+    }, 900);
+  } catch (e: any) {
+    setMsg('❌ ' + (e?.message || 'Failed to update password'));
+  } finally {
+    setBusy(false);
   }
+}
+
 
   // ----- Admin: load me/users/branches -----
   async function loadMe() {
@@ -257,26 +294,24 @@ export default function Settings() {
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-          <p className="text-muted-foreground mt-1">Manage your account and system preferences</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            className="px-5 py-2.5 bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 text-sm"
-            onClick={signOut}
-            title="Sign out"
-          >
+<div className="flex items-center justify-between">
+  <div>
+    <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+    <p className="text-muted-foreground mt-1">Manage your account and system preferences</p>
+  </div>
+
+  <div className="flex items-center gap-3">
+    {/* Single, unified role badge */}
+    <RoleBadge />
+
+    <button
+      className="px-5 py-2.5 bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 text-sm"
+      onClick={signOut}
+      title="Sign out"
+    >
             Logout
           </button>
-          <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${
-            isAdmin 
-              ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100' 
-              : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100'
-          }`}>
-            {isAdmin ? 'Administrator' : 'Manager'}
-          </div>
+        
         </div>
       </div>
 
@@ -415,14 +450,17 @@ export default function Settings() {
                 />
               </Field>
               <Field label="Role">
-                <select 
-                  className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all duration-200 text-foreground dark:[color-scheme:dark]" 
-                  value={newUser.role} 
-                  onChange={e => setNewUser({ ...newUser, role: e.target.value as any })}
-                >
-                  <option value="manager">👥 Manager (Scoped)</option>
-                  <option value="admin">🔑 Admin (Full access)</option>
-                </select>
+               <select
+  className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all duration-200 text-foreground dark:[color-scheme:dark]"
+  value={newUser.role}
+  onChange={(e) => setNewUser({ ...newUser, role: e.target.value as RoleOption })}
+>
+  <option value="manager">👥 Manager (Scoped)</option>
+  <option value="hr">🤝 HR</option>
+  <option value="accountant">🧾 Accountant</option>
+  <option value="admin">🔑 Admin (Full access)</option>
+</select>
+
               </Field>
             </div>
 
@@ -574,12 +612,16 @@ function UserRowItem({
   onDelete: (u: UserRow) => void
 }) {
   const [email, setEmail] = useState(u.email || '')
-  const [role, setRole] = useState<string>(u.role)
+  const [role, setRole] = useState<RoleOption>(toRole(u.role));
+  const isAdminUser = u.username === 'admin';
+
+
+
   const [branches, setBranches] = useState<string[]>(u.allowed_branches || [])
   const [pw, setPw] = useState('')
 
-  const canEditBranches = role === 'manager'
-  const isAdminUser = u.username === 'admin'
+  const canEditBranches = role === 'manager';
+
 
   return (
     <tr className="hover:bg-muted/50 transition-colors border-b border-border/50">
@@ -592,15 +634,19 @@ function UserRowItem({
         />
       </td>
       <td className="px-3 py-3">
-        <select 
-          className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-foreground dark:[color-scheme:dark]" 
-          value={role} 
-          onChange={(e) => setRole(e.target.value as any)} 
-          disabled={isAdminUser}
-        >
-          <option value="manager">👥 Manager</option>
-          <option value="admin">🔑 Admin</option>
-        </select>
+        <select
+  className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-foreground dark:[color-scheme:dark]"
+  value={role}
+  onChange={(e) => setRole(e.target.value as RoleOption)}
+  disabled={isAdminUser}
+>
+  <option value="manager">👥 Manager</option>
+  <option value="hr">🤝 HR</option>
+  <option value="accountant">🧾 Accountant</option>
+  <option value="admin">🔑 Admin</option>
+</select>
+
+
       </td>
       <td className="px-3 py-3">
         {canEditBranches ? (

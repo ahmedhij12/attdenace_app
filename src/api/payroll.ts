@@ -5,6 +5,7 @@ export type PayrollTotals = {
   hours: number
   food_allowance_iqd: number
   other_allowance_iqd: number
+  advances_iqd: number        // NEW
   deductions_iqd: number
   late_penalty_iqd: number
   allowances_iqd: number
@@ -96,15 +97,17 @@ export async function getPayroll(params: { from: string; to: string; branch?: st
       nationality: String(r?.nationality ?? '').toLowerCase(),
       days: r?.days ?? {},
       totals: {
-        hours: Number(t?.hours ?? 0),
-        food_allowance_iqd: Number(t?.food_allowance_iqd ?? 0),
-        other_allowance_iqd: Number(t?.other_allowance_iqd ?? 0),
-        deductions_iqd: Number(t?.deductions_iqd ?? 0),
-        late_penalty_iqd: Number(t?.late_penalty_iqd ?? 0),
-        allowances_iqd: Number(t?.allowances_iqd ?? 0),
-        base_salary_iqd: Number(t?.base_salary_iqd ?? 0),
-        total_pay_iqd: Number(t?.total_pay_iqd ?? 0),
-      },
+  hours: Number(t?.hours ?? 0),
+  food_allowance_iqd: Number(t?.food_allowance_iqd ?? 0),
+  other_allowance_iqd: Number(t?.other_allowance_iqd ?? 0),
+  advances_iqd: Number(t?.advances_iqd ?? 0),      // NEW
+  deductions_iqd: Number(t?.deductions_iqd ?? 0),
+  late_penalty_iqd: Number(t?.late_penalty_iqd ?? 0),
+  allowances_iqd: Number(t?.allowances_iqd ?? 0),
+  base_salary_iqd: Number(t?.base_salary_iqd ?? 0),
+  total_pay_iqd: Number(t?.total_pay_iqd ?? 0),
+},
+
       meta: r?.meta,
     }
   })

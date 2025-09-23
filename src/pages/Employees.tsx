@@ -1,8 +1,10 @@
 // src/pages/Employees.tsx
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { api, BRANCHES } from '@/api/client'
 import type { Employee } from '@/types/models'
 import { useAuthStore } from '@/store/auth'
+import RoleBadge from "@/components/RoleBadge";
+import { listEmployees } from '@/api/employees'
 
 type Me = { username: string; email: string; role: 'admin'|'manager'|string; allowed_branches: any[] }
 
@@ -31,13 +33,12 @@ export default function Employees() {
   const [branchList, setBranchList] = useState<string[]>([])
   const [branchFilter, setBranchFilter] = useState<string>('All')
 
-  const [editing, setEditing] = useState<Employee|null>(null)
-  const [show, setShow] = useState(false)
-
   // role/scope
   const [me, setMe] = useState<Me|null>(null)
   const isManager = (me?.role || '').toLowerCase() === 'manager'
   const allowedBranchesRaw = me?.allowed_branches ?? []
+  const isAccountant = (me?.role || '').toLowerCase() === 'accountant'
+
 
   // ---------- infra ----------
   function getApiBase(): string {
@@ -77,22 +78,50 @@ export default function Employees() {
     } catch {}
   }
 
+  // ---------- fetch employees (with fallback) ----------
+  async function fetchEmployeesWithFallback(includeArchived: boolean): Promise<any[]> {
+    try {
+      const r = await listEmployees({ include_archived: includeArchived })
+      const arr = Array.isArray(r) ? r : (r as any)?.items
+      if (Array.isArray(arr)) return arr
+    } catch {}
+
+    const params = new URLSearchParams()
+    params.set('include_archived', includeArchived ? 'true' : 'false')
+
+    for (const path of ['/employees', '/api/employees']) {
+      try {
+        const resp = await fetch(`${getApiBase()}${path}?${params.toString()}`, {
+          method: 'GET',
+          headers: { Accept: 'application/json', ...tokenHeader() },
+          credentials: 'include',
+        })
+        if (!resp.ok) continue
+        const ct = resp.headers.get('content-type') || ''
+        if (!ct.toLowerCase().includes('application/json')) { await resp.text(); continue }
+        const data = await resp.json()
+        const arr = Array.isArray(data) ? data : (data?.items ?? [])
+        if (Array.isArray(arr)) return arr
+      } catch {}
+    }
+    throw new Error('Could not load employees (unexpected response).')
+  }
+
   // ---------- branch helpers ----------
   const uniq = (arr: string[]) =>
     Array.from(new Set(arr.map(s => String(s).trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b))
-
   const normKey = (v: any) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, '')
-
   function isWithinAllowed(x:any): boolean {
     if (!isManager) return true
-    const names = new Set(allowedBranchesRaw.map((b:any) => normKey(typeof b === 'object' ? (b.name ?? b.title ?? b.slug) : b)))
+    const names = new Set(allowedBranchesRaw.map((b:any) =>
+      normKey(typeof b === 'object' ? (b.name ?? b.title ?? b.slug) : b)))
     return names.size === 0 ? false : names.has(normKey(x.branch))
   }
-
   async function buildBranchListUnion(): Promise<string[]> {
     try {
-      const devs = await api.getDevices()
-      const fromDevices = uniq((Array.isArray(devs) ? devs : (devs as any)?.items ?? [])
+      const devResp = await api.listDevices()
+      const devs = api.ensureArray(devResp)
+      const fromDevices = uniq((Array.isArray(devs) ? devs : [])
         .map((d:any) => String(d?.branch ?? d?.branch_name ?? '')))
 
       let fromServer: string[] = []
@@ -109,7 +138,8 @@ export default function Employees() {
 
       let union = uniq([...fromStatic, ...fromDevices, ...fromServer])
       if (isManager) {
-        const allowedNames = new Set(allowedBranchesRaw.map((b:any) => normKey(typeof b === 'object' ? (b.name ?? b.title ?? b.slug) : b)))
+        const allowedNames = new Set(allowedBranchesRaw.map((b:any) =>
+          normKey(typeof b === 'object' ? (b.name ?? b.title ?? b.slug) : b)))
         union = union.filter(b => allowedNames.has(normKey(b)))
       }
       return union
@@ -120,8 +150,17 @@ export default function Employees() {
   async function load() {
     setLoading(true); setError(null)
     try {
-      const data = await api.getEmployees({})
-      const scoped = (isManager ? data.filter(isWithinAllowed) : data)
+      // Server: request active-only if supported
+      const all = await fetchEmployeesWithFallback(false)
+
+      // Client guard for legacy flags
+      const activeOnly = all.filter((e: any) => {
+        if (e?.status === 'active') return true
+        if (e?.status === 'left') return false
+        return e?.is_active === 1 || e?.is_active === true
+      })
+
+      const scoped = isManager ? activeOnly.filter(isWithinAllowed) : activeOnly
 
       const union = await buildBranchListUnion()
       setBranchList(union)
@@ -129,18 +168,17 @@ export default function Employees() {
       const qLower = q.trim().toLowerCase()
       const filteredByBranch = (branchFilter === 'All')
         ? scoped
-        : scoped.filter((e:any) => normKey(e.branch) === normKey(branchFilter))
+        : scoped.filter((e: any) => normKey(e.branch) === normKey(branchFilter))
 
       const finalRows = qLower
-        ? filteredByBranch.filter((e:any) =>
+        ? filteredByBranch.filter((e: any) =>
             (e.name || '').toLowerCase().includes(qLower) ||
-            (e.uid || '').toLowerCase().includes(qLower) ||
-            (e.code || '').toLowerCase().includes(qLower)
-          )
+            String(e.uid || '').toLowerCase().includes(qLower) ||
+            String(e.code || '').toLowerCase().includes(qLower))
         : filteredByBranch
 
       setRows(finalRows)
-    } catch (err:any) {
+    } catch (err: any) {
       setError(err?.message ?? 'Failed to load employees')
     } finally {
       setLoading(false)
@@ -150,34 +188,13 @@ export default function Employees() {
   useEffect(() => { loadMe() }, [])
   useEffect(() => { load() }, [q, branchFilter, me?.role, JSON.stringify(allowedBranchesRaw)])
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault()
-    if (isManager) { alert('Read-only role: managers cannot add or edit employees.'); return }
-    if (!editing) return
-    try {
-      setLoading(true); setError(null)
-      if (editing.id == null) await api.createEmployee(editing as any)
-      else await api.updateEmployee(editing.id, editing as any)
-      setShow(false); setEditing(null)
-      await load()
-      if (branchFilter === 'All' && (editing.branch ?? '')) setBranchFilter(String(editing.branch))
-    } catch(e:any){ setError(e?.message ?? 'Failed to save') } finally { setLoading(false) }
-  }
-  async function remove(id: number) {
-    if (isManager) { alert('Read-only role: managers cannot delete employees.'); return }
-    if (!confirm('Delete employee?')) return
-    try { setLoading(true); await api.deleteEmployee(id); await load() }
-    catch(e:any){ setError(e?.message ?? 'Failed to delete') }
-    finally { setLoading(false) }
-  }
-
   const esc = (v: any) => (v == null ? '' : `"${String(v).replace(/"/g, '""')}"`)
   function exportCSV() {
     const header = ['Name','Branch','Nationality','Department','UID','Code','EmploymentType','HourlyRate','SalaryIQD','Phone','JoinedAt']
     const body = rows.map((e:any)=>[
       e.name, e.branch ?? '', (e.nationality ?? ''), e.department ?? '', e.uid ?? '', e.code ?? '',
       e.employment_type ?? '', e.hourly_rate ?? '', e.salary_iqd ?? '',
-      e.phone ?? '', e.joined_at ?? ''
+      e.phone ?? '', getJoinedAt(e) ?? ''
     ])
     const csv = [header, ...body].map(r => r.map(esc).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -194,13 +211,25 @@ export default function Employees() {
     const d = new Date(s)
     return isNaN(d.getTime()) ? s : d.toLocaleDateString()
   }
+// Normalize various server keys → a single joined-at value
+const getJoinedAt = (e: any) =>
+  e?.joined_at ?? e?.joinedAt ?? e?.join_date ?? e?.joined ??
+  e?.start_date ?? e?.hired_at ?? e?.created_at ?? null;
 
-  // Edit modal options: include union list and current value (in case it’s legacy)
-  const editBranchOptions = useMemo(() => {
-    const set = new Set<string>(branchList)
-    if (editing?.branch) set.add(String(editing.branch))
-    return Array.from(set).filter(Boolean).sort((a,b)=>a.localeCompare(b))
-  }, [branchList, editing?.branch])
+  if (isAccountant) {
+  return (
+    <div className="space-y-6 p-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Employees</h1>
+        <p className="text-muted-foreground mt-1">Active employees</p>
+      </div>
+      <div className="card py-12 text-center text-sm">
+        Access denied. This page is disabled for the Accountant role.
+      </div>
+    </div>
+  )
+}
+
 
   return (
     <div className="space-y-6 p-6">
@@ -210,20 +239,20 @@ export default function Employees() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Employees</h1>
-          <p className="text-muted-foreground mt-1">Manage employee records and information</p>
+          <p className="text-muted-foreground mt-1">Browse, filter, and export your active roster</p>
         </div>
+
         <div className="flex items-center gap-3">
-          <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${
-            isManager 
-              ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100' 
-              : 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100'
-          }`}>
-            {isManager ? 'Manager View' : 'Admin Access'}
-          </div>
+          <RoleBadge />
+          {isManager && (allowedBranchesRaw?.length ?? 0) > 0 && (
+            <div className="text-xs text-muted-foreground">
+              {allowedBranchesRaw.length} branch{allowedBranchesRaw.length !== 1 ? 'es' : ''}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Controls */}
+      {/* Controls (read-only) */}
       <div className="card" style={{ colorScheme: theme === 'dark' ? 'dark' : 'light' }}>
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-2">
@@ -231,7 +260,7 @@ export default function Employees() {
               <div className="w-2 h-2 rounded-full bg-blue-500"></div>
               <h3 className="font-semibold text-lg">Employee Management</h3>
             </div>
-            <p className="text-sm text-muted-foreground">Search, filter, and manage your employee database</p>
+            <p className="text-sm text-muted-foreground">Search, filter, and export the roster</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <select 
@@ -256,21 +285,7 @@ export default function Employees() {
             >
               Export CSV
             </button>
-            <button
-              className="px-6 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 text-sm"
-              onClick={() => {
-                if (isManager) { alert('Read-only role: managers cannot add employees.'); return }
-                setEditing({
-                  id: undefined, name: '', branch: '', uid: '', code: '',
-                  department: null, address: null, phone: null, birthdate: null,
-                  employment_type: null, hourly_rate: null, salary_iqd: null, joined_at: null,
-                  // NEW: default nationality so payroll can compute allowances
-                  nationality: 'iraqi',
-                } as unknown as Employee)
-                setShow(true)
-              }}>
-              Add Employee
-            </button>
+            {/* Add/Edit/Delete intentionally removed to keep this page read-only */}
           </div>
         </div>
       </div>
@@ -289,7 +304,6 @@ export default function Employees() {
               <tr className="text-left text-muted-foreground">
                 <th className="px-3 py-2 font-medium">Name</th>
                 <th className="px-3 py-2 font-medium">Branch</th>
-                {/* NEW */}
                 <th className="px-3 py-2 font-medium">Nationality</th>
                 <th className="px-3 py-2 font-medium">Department</th>
                 <th className="px-3 py-2 font-medium">UID</th>
@@ -299,20 +313,18 @@ export default function Employees() {
                 <th className="px-3 py-2 font-medium">Salary (IQD)</th>
                 <th className="px-3 py-2 font-medium">Phone</th>
                 <th className="px-3 py-2 font-medium">Joined At</th>
-                <th className="px-3 py-2 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={12}>Loading.</td></tr>
+                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={11}>Loading.</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={12}>No employees found</td></tr>
+                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={11}>No employees found</td></tr>
               ) : (
                 rows.map((e:any) => (
                   <tr key={e.id} className="border-b border-border/40 hover:bg-muted/30">
                     <td className="px-3 py-3">{e.name}</td>
                     <td className="px-3 py-3">{e.branch ?? '-'}</td>
-                    {/* NEW */}
                     <td className="px-3 py-3">{e.nationality ?? '-'}</td>
                     <td className="px-3 py-3">{e.department ?? '-'}</td>
                     <td className="px-3 py-3 text-muted-foreground">{e.uid ?? '-'}</td>
@@ -323,21 +335,8 @@ export default function Employees() {
                     <td className="px-3 py-3 text-muted-foreground">{e.employment_type === 'wages' ? (e.hourly_rate ?? '-') : '-'}</td>
                     <td className="px-3 py-3 text-muted-foreground">{e.employment_type === 'salary' ? (e.salary_iqd ?? '-') : '-'}</td>
                     <td className="px-3 py-3 text-muted-foreground">{e.phone ?? '-'}</td>
-                    <td className="px-3 py-3 text-muted-foreground">{fmtDate(e.joined_at)}</td>
-                    <td className="px-3 py-3 text-right space-x-2">
-                      <button 
-                        className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-lg text-xs font-medium shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
-                        onClick={() => { setEditing(e); setShow(true) }}
-                      >
-                        Edit
-                      </button>
-                      <button 
-                        className="px-3 py-1.5 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white rounded-lg text-xs font-medium shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200"
-                        onClick={() => remove(e.id!)}
-                      >
-                        Delete
-                      </button>
-                    </td>
+                    <td className="px-3 py-3 text-muted-foreground">{fmtDate(getJoinedAt(e))}</td>
+
                   </tr>
                 ))
               )}
@@ -345,162 +344,6 @@ export default function Employees() {
           </table>
         </div>
       </div>
-
-      {/* Edit Modal */}
-      {show && editing && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-4 z-50">
-          <form
-            onSubmit={save}
-            className="bg-background rounded-3xl shadow-2xl border border-border w-full max-w-4xl space-y-6 p-8 max-h-[90vh] overflow-auto"
-            style={{ colorScheme: theme === 'dark' ? 'dark' : 'light' }}
-          >
-            <div className="text-2xl font-bold">
-              {editing.id == null ? 'Add Employee' : 'Edit Employee'}
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Field label="Name">
-                <input 
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200" 
-                  value={editing.name || ''} 
-                  onChange={e=>setEditing({...editing, name:e.target.value})}
-                />
-              </Field>
-
-              <Field label="Branch">
-                <select
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-foreground"
-                  value={editing.branch || ''}
-                  onChange={e=>setEditing({ ...editing, branch: e.target.value })}
-                >
-                  <option value="">— Select Branch —</option>
-                  {editBranchOptions.map(b => <option key={b} value={b}>{b}</option>)}
-                </select>
-              </Field>
-
-              {/* NEW */}
-              <Field label="Nationality">
-                <input
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
-                  placeholder="e.g., iraqi, jordanian, indian."
-                  value={(editing as any).nationality ?? 'iraqi'}
-                  onChange={e=>setEditing({ ...(editing as any), nationality: e.target.value } as any)}
-                />
-              </Field>
-
-              <Field label="Department">
-                <input 
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200" 
-                  value={(editing as any).department || ''} 
-                  onChange={e=>setEditing({ ...(editing as any), department:e.target.value } as any)}
-                />
-              </Field>
-
-              <Field label="UID">
-                <input 
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 font-mono" 
-                  value={editing.uid || ''} 
-                  onChange={e=>setEditing({ ...(editing as any), uid:e.target.value } as any)}
-                />
-              </Field>
-
-              <Field label="Code">
-                <input 
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 font-mono" 
-                  value={editing.code || ''} 
-                  onChange={e=>setEditing({ ...(editing as any), code:e.target.value } as any)}
-                />
-              </Field>
-
-              <Field label="Employment Type">
-                <select 
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-foreground" 
-                  value={(editing as any).employment_type ?? ''} 
-                  onChange={e => {
-                    const v = (e.target.value || null) as 'wages' | 'salary' | null
-                    setEditing({
-                      ...(editing as any),
-                      employment_type: v,
-                      hourly_rate: v === 'salary' ? null : (editing as any).hourly_rate,
-                      salary_iqd: v === 'wages' ? null : (editing as any).salary_iqd,
-                    } as any)
-                  }}
-                >
-                  <option value="">— Select Type —</option>
-                  <option value="wages">Wages</option>
-                  <option value="salary">Salary</option>
-                </select>
-              </Field>
-
-              {(editing as any).employment_type === 'wages' && (
-                <Field label="Hourly Rate">
-                  <input 
-                    className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200" 
-                    type="number" 
-                    min={0}
-                    value={(editing as any).hourly_rate ?? ''} 
-                    onChange={e=>setEditing({ ...(editing as any), hourly_rate: e.target.value === '' ? null : Number(e.target.value) } as any)}
-                  />
-                </Field>
-              )}
-
-              {(editing as any).employment_type === 'salary' && (
-                <Field label="Salary (IQD)">
-                  <input 
-                    className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200" 
-                    type="number" 
-                    min={0}
-                    value={(editing as any).salary_iqd ?? ''} 
-                    onChange={e=>setEditing({ ...(editing as any), salary_iqd: e.target.value === '' ? null : Number(e.target.value) } as any)}
-                  />
-                </Field>
-              )}
-
-              <Field label="Phone">
-                <input 
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200" 
-                  value={(editing as any).phone ?? ''} 
-                  onChange={e=>setEditing({ ...(editing as any), phone: e.target.value || null } as any)}
-                />
-              </Field>
-
-              <Field label="Joined At">
-                <input 
-                  className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200" 
-                  type="date" 
-                  value={(editing as any).joined_at ? String((editing as any).joined_at).substring(0,10) : ''} 
-                  onChange={e=>setEditing({ ...(editing as any), joined_at: e.target.value || null } as any)}
-                />
-              </Field>
-            </div>
-
-            <div className="flex items-center justify-end gap-3">
-              <button 
-                type="button"
-                className="px-4 py-2 rounded-xl border border-border hover:bg-muted/40 transition"
-                onClick={() => { setShow(false); setEditing(null) }}
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit"
-                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium shadow-lg transition"
-              >
-                Save Employee
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium text-muted-foreground">{label}</label>
-      {children}
     </div>
   )
 }
