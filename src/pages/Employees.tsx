@@ -37,7 +37,6 @@ export default function Employees() {
   const [me, setMe] = useState<Me|null>(null)
   const isManager = (me?.role || '').toLowerCase() === 'manager'
   const allowedBranchesRaw = me?.allowed_branches ?? []
-  const isAccountant = (me?.role || '').toLowerCase() === 'accountant'
 
 
   // ---------- infra ----------
