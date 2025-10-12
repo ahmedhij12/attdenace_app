@@ -4,6 +4,8 @@ import type { DeviceInfo } from '@/types/models'
 import { useAuthStore } from '@/store/auth'
 import RoleBadge from "@/components/RoleBadge";
 import { formatLocalDateTime } from "@/features/employeeFiles/utils/time";
+import { isAdmin, isHR, isManager, isAccountant } from "@/lib/roles";
+
 
 
 type Me = {

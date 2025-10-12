@@ -7,6 +7,8 @@ import RoleBadge from "@/components/RoleBadge";
 import { useAuthStore } from '@/store/auth';
 import { Navigate } from "react-router-dom";
 import { formatLocalDateTime } from "@/features/employeeFiles/utils/time";
+import { isAdmin, isHR, isManager, isAccountant } from "@/lib/roles";
+
 
 /** Config */
 const OFFLINE_MINUTES = 5;      // device considered offline if no heartbeat for N minutes
