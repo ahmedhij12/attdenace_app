@@ -16,10 +16,20 @@ type Actions = {
 }
 
 const initialBase = (import.meta.env.MODE === 'development') ? '/api' : 'https://api.hijazionline.org';
-const initialToken = localStorage.getItem('jwt') || ''
-const initialEmail = localStorage.getItem('email') || ''
-const initialRole = localStorage.getItem('role') || 'viewer'
-const initialTheme = (localStorage.getItem('theme') as 'light'|'dark') || 'light'
+
+// Safe localStorage access with fallbacks
+function safeGetItem(key: string, fallback: string = ''): string {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const initialToken = safeGetItem('jwt')
+const initialEmail = safeGetItem('email')
+const initialRole = safeGetItem('role', 'viewer')
+const initialTheme = (safeGetItem('theme') as 'light'|'dark') || 'light'
 
 export const useAuthStore = create<State & Actions>((set, get) => ({
   apiBase: initialBase,
@@ -29,9 +39,13 @@ export const useAuthStore = create<State & Actions>((set, get) => ({
   theme: initialTheme,
   setApiBase: (v) => { localStorage.setItem('apiBase', v); set({apiBase: v}) },
   setSession: (token, email, role) => {
-    localStorage.setItem('jwt', token)
-    localStorage.setItem('email', email)
-    localStorage.setItem('role', role)
+    try {
+      localStorage.setItem('jwt', token)
+      localStorage.setItem('email', email)
+      localStorage.setItem('role', role)
+    } catch (e) {
+      console.warn('Failed to save to localStorage:', e)
+    }
     set({ token, email, role })
   },
   async login(username, password) {
@@ -52,15 +66,23 @@ export const useAuthStore = create<State & Actions>((set, get) => ({
     get().setSession(token, email, role)
   },
   logout: () => {
-    localStorage.removeItem('jwt')
-    localStorage.removeItem('email')
-    localStorage.removeItem('role')
+    try {
+      localStorage.removeItem('jwt')
+      localStorage.removeItem('email')
+      localStorage.removeItem('role')
+    } catch (e) {
+      console.warn('Failed to clear localStorage:', e)
+    }
     set({ token: '', email: '', role: 'viewer' })
     window.location.href = '/login'
   },
   toggleTheme: () => {
     const t = get().theme === 'light' ? 'dark' : 'light'
-    localStorage.setItem('theme', t)
+    try {
+      localStorage.setItem('theme', t)
+    } catch (e) {
+      console.warn('Failed to save theme:', e)
+    }
     document.documentElement.classList.toggle('dark', t === 'dark')
     set({ theme: t })
   }

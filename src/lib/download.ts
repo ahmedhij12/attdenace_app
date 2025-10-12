@@ -9,7 +9,7 @@ export function getApiBase(): string {
   const env = (import.meta as any)?.env?.VITE_API_URL as string | undefined;
   if (env) return env.replace(/\/+$/, "");
 
-  const u = new URL(window.location.href);
+  const u = typeof window !== 'undefined' ? new URL(window.location.href) : new URL('http://localhost:8000');
   const devPorts = new Set(["5173", "5174", "5175", "5137"]);
   const port = devPorts.has(u.port) ? "8000" : u.port;
   return `${u.protocol}//${u.hostname}${port ? ":" + port : ""}`;

@@ -13,7 +13,7 @@ export default function Logs() {
   // me
   const [me, setMe] = useState<Me|null>(null)
   const isAdmin = (me?.role || 'admin').toLowerCase() === 'admin'
-  const allowed = (me?.role || 'manager').toLowerCase() !== 'accountant'
+  const allowed = me ? (me.role || 'manager').toLowerCase() !== 'accountant' : true
 
 
   // filters (YYYY-MM-DD)

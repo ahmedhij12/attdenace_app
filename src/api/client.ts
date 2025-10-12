@@ -134,6 +134,11 @@ class ApiClient {
     return this.listEmployees(params);
   }
 
+  // Add missing method that's used in Dashboard
+  async getLogs(params?: any) {
+    return this.request(`/logs${this.buildQuery(params)}`);
+  }
+
   getEmployee(id: string | number) {
     return this.request(`/employees/${id}`).then((d) => this.mapEmployeeFromServer(d));
   }

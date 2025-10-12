@@ -34,7 +34,6 @@ export default function Devices() {
   const isManager = (me?.role || '').toLowerCase() === 'manager'
   const allowed = useMemo(()=> me?.allowed_branches ?? [], [me])
   const isAccountant = (me?.role || '').toLowerCase() === 'accountant'
-  const canManage = !isManager;  // admin & hr only
 
 
 

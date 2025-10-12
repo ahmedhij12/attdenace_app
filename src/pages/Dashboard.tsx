@@ -611,8 +611,7 @@ if (role === 'accountant') {
         <p className="text-muted-foreground mt-1">Overview</p>
       </div>
       <div className="card py-12 text-center text-sm">
-        return <Navigate to="/employee-files" replace />;
-        
+        <Navigate to="/employee-files" replace />
       </div>
     </div>
   );

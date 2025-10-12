@@ -31,7 +31,6 @@ export default function Settings() {
   const isAdmin = ((me?.role as any) || sessionRole || '').toString().toLowerCase() === 'admin';
 
 const role = useAuthStore(s => s.role?.toLowerCase?.() || 'manager');
-const logout = useAuthStore(s => s.logout); // if you have it
 
 
   // Change password
