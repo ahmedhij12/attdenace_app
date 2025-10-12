@@ -1,7 +1,5 @@
 // src/api/client.ts
-
-// Static fallback so Employees.tsx can import it safely.
-// Fill this with known branches if you like.
+import { useAuthStore } from '@/store/auth';
 export const BRANCHES: string[] = [];
 
 function resolveApiBase(): string {
@@ -299,12 +297,19 @@ export default api;
 
 export function authHeader(): Record<string, string> {
   try {
-    // common token locations
-    const raw = localStorage.getItem("auth");
+    // Look in all common places our app has ever stored the token
+    const raw = localStorage.getItem("auth") || sessionStorage.getItem("auth");
     const token =
+      // current
+      localStorage.getItem("jwt") ||
+      // older keys / alternates
       localStorage.getItem("token") ||
       localStorage.getItem("access_token") ||
-      (raw ? (JSON.parse(raw).token || JSON.parse(raw).access_token) : null);
+      sessionStorage.getItem("jwt") ||
+      sessionStorage.getItem("token") ||
+      sessionStorage.getItem("access_token") ||
+      (raw ? (JSON.parse(raw).jwt || JSON.parse(raw).token || JSON.parse(raw).access_token) : null);
+
     return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
     return {};

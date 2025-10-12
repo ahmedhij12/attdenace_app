@@ -13,22 +13,25 @@ export type AttendanceLog = {
 }
 
 export interface Employee {
-  id: number
-  name: string
-  department: string
-  branch: string
-  uid: string
-  code?: string | null
-  join_date?: string | null
-  address?: string | null
-  phone?: string | null
-  birthdate?: string | null
-  employment_type?: 'wages' | 'salary' | null
-  hourly_rate?: number | null
-  salary_iqd?: number | null
-  // NEW ↓
-  nationality?: 'iraqi' | 'non_iraqi'
+  id: number;
+  name: string;
+  department?: string;        // we will label this "Position" in the UI
+  branch: string;             // location (unchanged)
+  brand?: string | null;      // NEW: restaurant brand (Awtar | 360 | AA Chicken)
+  uid?: string;
+  code?: string;
+  join_date?: string;
+  address?: string;
+  phone?: string;
+  birthdate?: string;
+  employment_type?: 'wages' | 'salary';
+  hourly_rate?: number | null;
+  salary_iqd?: number | null;
+  nationality?: string;
+  is_active?: number;
+  status?: string;
 }
+
 
 export type DeviceInfo = {
   id: number

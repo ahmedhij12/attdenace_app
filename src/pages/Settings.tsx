@@ -65,23 +65,31 @@ const role = useAuthStore(s => s.role?.toLowerCase?.() || 'manager');
   const validPw =
     !!oldPw && !!newPw && newPw.length >= 8 && confirmPw === newPw && oldPw !== newPw
 
-  // ---------- helpers: API base + token ----------
-  function getApiBase(): string {
-  // 1) Prefer store (most reliable)
-  const st: any = (useAuthStore as any)?.getState?.()
-  const fromStore = st?.apiBase
-  if (fromStore) return String(fromStore).replace(/\/+$/, '')
 
-  // 2) .env override
-  const env = (import.meta as any)?.env?.VITE_API_URL as string | undefined
-  if (env) return env.replace(/\/+$/, '')
+function getApiBase(): string {
+  const st: any = (useAuthStore as any)?.getState?.();
+  const fromStore = st?.apiBase;
+  if (fromStore) return String(fromStore).replace(/\/+$/, '');
 
-  // 3) Local dev fallback: map common Vite ports to FastAPI 8000
-  const u = new URL(window.location.href)
-  const devPorts = new Set(['5173', '5174', '5175', '5137'])
-  const port = devPorts.has(u.port) ? '8000' : u.port
-  return `${u.protocol}//${u.hostname}${port ? ':' + port : ''}`
+  const env = (import.meta as any)?.env || {};
+  const v =
+    env.VITE_API_BASE_URL ??
+    env.VITE_API_URL ??
+    (window as any)?.VITE_API_BASE_URL ??
+    (window as any)?.VITE_API_URL ??
+    '';
+  if (typeof v === 'string' && v) return v.replace(/\/+$/, '');
+
+  try {
+    const u = new URL(window.location.href);
+    const devPorts = new Set(['5173', '5174', '5175', '5137']);
+    const port = devPorts.has(u.port) ? '8000' : u.port;
+    return `${u.protocol}//${u.hostname}${port ? ':' + port : ''}`;
+  } catch {
+    return '';
+  }
 }
+
 
   function getToken(): string {
     try {
@@ -338,7 +346,6 @@ const role = useAuthStore(s => s.role?.toLowerCase?.() || 'manager');
           </div>
         </div>
       </div>
-
       {/* Account Security */}
       <div className="card">
         <div className="flex items-start justify-between gap-4">
@@ -703,3 +710,4 @@ function UserRowItem({
     </tr>
   )
 }
+

@@ -1,15 +1,19 @@
+# dependencies & builds
 node_modules/
 dist/
 dist-ssr/
-*.local
 
-# build artifacts / binaries
+# local configs & secrets
+*.local
+.env*
+*.zip
+
+# tauri artifacts
 src-tauri.zip
 src-tauri/target/
 
-# OS / IDE
-.DS_Store
-Thumbs.db
+# IDE / OS files
 .vscode/
 .idea/
-.env
+.DS_Store
+Thumbs.db

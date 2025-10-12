@@ -11,7 +11,7 @@ import Employees from "./pages/Employees";
 import Devices from "./pages/Devices";
 import Settings from "./pages/Settings";
 import Payroll from "./pages/Payroll";
-import EmployeeFile from "./pages/EmployeeFile";
+import EmployeeFile from "./pages/EmployeeFile/EmployeeFilePage";
 import { useAuthStore } from "./store/auth";
 import Audits from "@/pages/Audits";
 
