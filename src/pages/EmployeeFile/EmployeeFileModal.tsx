@@ -2492,7 +2492,7 @@ This cannot be undone. Continue?`
       formData.append('defaultBranch', branchOptions[0] || 'Main Branch')
 
       // Send to backend for processing
-      const response = await fetch('/api/exports/employees/import-excel', {
+      const response = await fetch(`${API_BASE}/exports/employees/import-excel`, {
         method: 'POST',
         body: formData,
         headers: {
@@ -2953,7 +2953,7 @@ if (!open) return null
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch('/api/exports/employees/import-excel', {
+      const response = await fetch(`${API_BASE}/exports/employees/import-excel`, {
         method: 'POST',
         body: formData,
         headers: {
@@ -3000,7 +3000,7 @@ if (!open) return null
       setLoadingEmployees(true)
       const auth = token.startsWith('Bearer ') ? token : `Bearer ${token}`
       
-      const response = await fetch('/api/employee_files?status=active', {
+      const response = await fetch(`${API_BASE}/employee_files?status=active`, {
         method: 'GET',
         headers: {
           'Authorization': auth,
