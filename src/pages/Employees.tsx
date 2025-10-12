@@ -236,17 +236,16 @@ export default function Employees() {
     e?.start_date ?? e?.hired_at ?? e?.created_at ?? null;
 
   // ---------- derive view based on brandFilter (client-side) ----------
-const normBrand = (s: string) => String(s || '').trim().toLowerCase()
-const viewRows = rows.filter((r: any) => {
-  if (brandFilter === 'All Brands') return true
-  const b = normBrand(r.brand)
-  if (brandFilter === 'Awtar')       return b === 'awtar'
-  if (brandFilter === '360')         return b === '360'
-  if (brandFilter === 'AA Chicken')  return b === 'aa chicken'
-  if (brandFilter === 'CallCenter')  return b.replace(/\s+/g, '') === 'callcenter' // handles "Call Center"
-  return true
-})
-
+  const normBrand = (s: string) => String(s || '').trim().toLowerCase()
+  const viewRows = rows.filter((r: any) => {
+    if (brandFilter === 'All Brands') return true
+    const b = normBrand(r.brand)
+    if (brandFilter === 'Awtar')       return b === 'awtar'
+    if (brandFilter === '360')         return b === '360'
+    if (brandFilter === 'AA Chicken')  return b === 'aa chicken'
+    if (brandFilter === 'CallCenter')  return b.replace(/\s+/g, '') === 'callcenter' // handles "Call Center"
+    return true
+  })
 
   if (isAccountant) {
     return (
