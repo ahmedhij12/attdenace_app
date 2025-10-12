@@ -5,6 +5,8 @@ import type { Employee } from '@/types/models'
 import { useAuthStore } from '@/store/auth'
 import RoleBadge from "@/components/RoleBadge";
 import { listEmployees } from '@/api/employees'
+import { BRAND_OPTIONS } from '@/constants/brands';
+import { formatLocalDate } from "@/features/employeeFiles/utils/time";
 
 type Me = { username: string; email: string; role: 'admin'|'manager'|string; allowed_branches: any[] }
 
@@ -33,12 +35,16 @@ export default function Employees() {
   const [branchList, setBranchList] = useState<string[]>([])
   const [branchFilter, setBranchFilter] = useState<string>('All')
 
+  // NEW: Brand filter (client-side only; no backend changes)
+  const BRAND_OPTIONS = ['All Brands', 'Awtar', '360', 'AA Chicken', 'CallCenter'] as const
+  type BrandFilter = typeof BRAND_OPTIONS[number]
+  const [brandFilter, setBrandFilter] = useState<BrandFilter>('All Brands')
+
   // role/scope
   const [me, setMe] = useState<Me|null>(null)
   const isManager = (me?.role || '').toLowerCase() === 'manager'
   const allowedBranchesRaw = me?.allowed_branches ?? []
   const isAccountant = (me?.role || '').toLowerCase() === 'accountant'
-
 
   // ---------- infra ----------
   function getApiBase(): string {
@@ -186,15 +192,29 @@ export default function Employees() {
   }
 
   useEffect(() => { loadMe() }, [])
+  // Note: brandFilter is client-only; we don't re-fetch on it.
   useEffect(() => { load() }, [q, branchFilter, me?.role, JSON.stringify(allowedBranchesRaw)])
 
+  // ---------- CSV export (respects filters by using viewRows) ----------
   const esc = (v: any) => (v == null ? '' : `"${String(v).replace(/"/g, '""')}"`)
   function exportCSV() {
-    const header = ['Name','Branch','Nationality','Department','UID','Code','EmploymentType','HourlyRate','SalaryIQD','Phone','JoinedAt']
-    const body = rows.map((e:any)=>[
-      e.name, e.branch ?? '', (e.nationality ?? ''), e.department ?? '', e.uid ?? '', e.code ?? '',
-      e.employment_type ?? '', e.hourly_rate ?? '', e.salary_iqd ?? '',
-      e.phone ?? '', getJoinedAt(e) ?? ''
+    const header = [
+      'Name','Location','Brand','Nationality','Position',
+      'UID','Code','EmploymentType','HourlyRate','SalaryIQD','Phone','JoinedAt'
+    ]
+    const body = viewRows.map((e:any) => [
+      e.name,
+      e.branch ?? '',           // Location
+      e.brand ?? '',            // Brand
+      e.nationality ?? '',
+      e.department ?? '',       // Position
+      e.uid ?? '',
+      e.code ?? '',
+      e.employment_type ?? '',
+      e.hourly_rate ?? '',
+      e.salary_iqd ?? '',
+      e.phone ?? '',
+      getJoinedAt(e) ?? ''
     ])
     const csv = [header, ...body].map(r => r.map(esc).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -209,27 +229,39 @@ export default function Employees() {
     const s = String(v)
     if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10)
     const d = new Date(s)
-    return isNaN(d.getTime()) ? s : d.toLocaleDateString()
+     return formatLocalDate(s);
   }
-// Normalize various server keys → a single joined-at value
-const getJoinedAt = (e: any) =>
-  e?.joined_at ?? e?.joinedAt ?? e?.join_date ?? e?.joined ??
-  e?.start_date ?? e?.hired_at ?? e?.created_at ?? null;
+  // Normalize various server keys → a single joined-at value
+  const getJoinedAt = (e: any) =>
+    e?.joined_at ?? e?.joinedAt ?? e?.join_date ?? e?.joined ??
+    e?.start_date ?? e?.hired_at ?? e?.created_at ?? null;
+
+  // ---------- derive view based on brandFilter (client-side) ----------
+const normBrand = (s: string) => String(s || '').trim().toLowerCase()
+const viewRows = rows.filter((r: any) => {
+  if (brandFilter === 'All Brands') return true
+  const b = normBrand(r.brand)
+  if (brandFilter === 'Awtar')       return b === 'awtar'
+  if (brandFilter === '360')         return b === '360'
+  if (brandFilter === 'AA Chicken')  return b === 'aa chicken'
+  if (brandFilter === 'CallCenter')  return b.replace(/\s+/g, '') === 'callcenter' // handles "Call Center"
+  return true
+})
+
 
   if (isAccountant) {
-  return (
-    <div className="space-y-6 p-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Employees</h1>
-        <p className="text-muted-foreground mt-1">Active employees</p>
+    return (
+      <div className="space-y-6 p-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Employees</h1>
+          <p className="text-muted-foreground mt-1">Active employees</p>
+        </div>
+        <div className="card py-12 text-center text-sm">
+          Access denied. This page is disabled for the Accountant role.
+        </div>
       </div>
-      <div className="card py-12 text-center text-sm">
-        Access denied. This page is disabled for the Accountant role.
-      </div>
-    </div>
-  )
-}
-
+    )
+  }
 
   return (
     <div className="space-y-6 p-6">
@@ -263,25 +295,42 @@ const getJoinedAt = (e: any) =>
             <p className="text-sm text-muted-foreground">Search, filter, and export the roster</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
+            {/* Location filter */}
             <select 
               className="px-4 py-2.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm font-medium text-foreground" 
               value={branchFilter} 
               onChange={(e)=>setBranchFilter(e.target.value)} 
-              title="Filter by branch"
+              title="Filter by location"
             >
-              <option value="All">All Branches</option>
+              <option value="All">All Locations</option>
               {branchList.filter(b=>b!== 'All').map(b => <option key={b} value={b}>{b}</option>)}
             </select>
 
+            {/* NEW: Brand filter */}
+            <select
+              className="px-4 py-2.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm font-medium text-foreground"
+              value={brandFilter}
+              onChange={(e) => setBrandFilter(e.target.value as BrandFilter)}
+              title="Filter by brand"
+            >
+              {BRAND_OPTIONS.map((b) => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+
+            {/* Search */}
             <input 
               className="px-4 py-2.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm min-w-[200px]" 
               placeholder="Search employees." 
               value={q} 
               onChange={e=>setQ(e.target.value)} 
             />
+
+            {/* Export */}
             <button 
               className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 text-sm"
               onClick={exportCSV}
+              title="Export visible rows (respects filters)"
             >
               Export CSV
             </button>
@@ -303,9 +352,10 @@ const getJoinedAt = (e: any) =>
             <thead>
               <tr className="text-left text-muted-foreground">
                 <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Branch</th>
+                <th className="px-3 py-2 font-medium">Location</th>
+                <th className="px-3 py-2 font-medium">Brand</th>
                 <th className="px-3 py-2 font-medium">Nationality</th>
-                <th className="px-3 py-2 font-medium">Department</th>
+                <th className="px-3 py-2 font-medium">Position</th>
                 <th className="px-3 py-2 font-medium">UID</th>
                 <th className="px-3 py-2 font-medium">Code</th>
                 <th className="px-3 py-2 font-medium">Employment</th>
@@ -317,14 +367,15 @@ const getJoinedAt = (e: any) =>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={11}>Loading.</td></tr>
-              ) : rows.length === 0 ? (
-                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={11}>No employees found</td></tr>
+                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={12}>Loading.</td></tr>
+              ) : viewRows.length === 0 ? (
+                <tr><td className="px-3 py-6 text-center text-muted-foreground" colSpan={12}>No employees found</td></tr>
               ) : (
-                rows.map((e:any) => (
+                viewRows.map((e:any) => (
                   <tr key={e.id} className="border-b border-border/40 hover:bg-muted/30">
                     <td className="px-3 py-3">{e.name}</td>
                     <td className="px-3 py-3">{e.branch ?? '-'}</td>
+                    <td className="px-3 py-3">{e.brand ?? '-'}</td>
                     <td className="px-3 py-3">{e.nationality ?? '-'}</td>
                     <td className="px-3 py-3">{e.department ?? '-'}</td>
                     <td className="px-3 py-3 text-muted-foreground">{e.uid ?? '-'}</td>
@@ -336,7 +387,6 @@ const getJoinedAt = (e: any) =>
                     <td className="px-3 py-3 text-muted-foreground">{e.employment_type === 'salary' ? (e.salary_iqd ?? '-') : '-'}</td>
                     <td className="px-3 py-3 text-muted-foreground">{e.phone ?? '-'}</td>
                     <td className="px-3 py-3 text-muted-foreground">{fmtDate(getJoinedAt(e))}</td>
-
                   </tr>
                 ))
               )}

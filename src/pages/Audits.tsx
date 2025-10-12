@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getAudits, type AuditItem } from "@/api/audits";
 import { useAuthStore } from "@/store/auth";
+import { formatLocalDateTime } from "@/features/employeeFiles/utils";
 
 // --- date helpers (date-only, not datetime) ---
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -13,24 +14,12 @@ const addDays = (ymd: string, n: number) => {
   return toYmd(dt);
 };
 
-// pretty printer for the table
 function fmtWhen(v: any) {
   if (v === null || v === undefined) return "—";
   const s = String(v).trim();
   if (!s) return "—";
-  // accepts YYYY-MM-DD or YYYY-MM-DD HH:MM[:SS]
-  const m = s.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
-  if (m) {
-    const [, d, hh, mm, ss] = m;
-    const dateStr = new Date(`${d}T00:00:00`).toLocaleDateString();
-    if (hh && mm) {
-      const time = `${hh}:${mm}${ss && ss !== "00" ? `:${ss}` : ""}`;
-      if (time !== "00:00" && time !== "00:00:00") return `${dateStr}, ${time}`;
-    }
-    return dateStr;
-  }
-  const dt = new Date(s);
-  return isNaN(dt.getTime()) ? s : dt.toLocaleString();
+  // Delegate to shared util that normalizes ISO/SQLite strings to LOCAL time
+  return formatLocalDateTime(s);
 }
 
 export default function Audits() {
@@ -103,6 +92,19 @@ export default function Audits() {
     if (e.key === "Enter") applyFilters();
   }
 
+  // --- Export CSV (new) ---
+  function exportCsv() {
+    const params = new URLSearchParams();
+    if (fromUI) params.set("from", fromUI);
+    if (toUI) params.set("to", addDays(toUI, 1)); // keep same inclusive UX as table
+    if (actor) params.set("actor", actor);
+    if (code) params.set("employee_code", code);
+    if (action) params.set("action", action);
+    // no page/limit -> backend exports all rows for current filter
+    const url = `/audits/export?${params.toString()}`;
+    window.open(url, "_blank");
+  }
+
   const inputCls =
     "w-full px-3 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none transition-all duration-200 text-sm text-foreground dark:[color-scheme:dark]";
   const pillBtn =
@@ -121,7 +123,7 @@ export default function Audits() {
         </div>
       </div>
 
-      {/* Filters (no quick filter pills) */}
+      {/* Filters */}
       <div className="card">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-2">
@@ -133,7 +135,7 @@ export default function Audits() {
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-7 gap-4 items-end">
           <div>
             <label className="text-xs font-medium text-foreground block mb-2">From</label>
             <input type="date" value={fromUI} onChange={(e) => setFromUI(e.target.value)} onKeyDown={onEnter} className={inputCls} />
@@ -176,6 +178,15 @@ export default function Audits() {
               className={pillBtn}
             >
               Reset
+            </button>
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={loading || items.length === 0}
+              title={items.length === 0 ? "No rows to export" : "Download CSV"}
+              className={`${pillBtn} ${loading || items.length === 0 ? "opacity-60 cursor-not-allowed" : ""}`}
+            >
+              Export CSV
             </button>
           </div>
         </div>

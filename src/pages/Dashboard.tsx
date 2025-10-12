@@ -6,6 +6,7 @@ import type { AttendanceLog, Employee, DeviceInfo } from "@/types/models";
 import RoleBadge from "@/components/RoleBadge";
 import { useAuthStore } from '@/store/auth';
 import { Navigate } from "react-router-dom";
+import { formatLocalDateTime } from "@/features/employeeFiles/utils/time";
 
 /** Config */
 const OFFLINE_MINUTES = 5;      // device considered offline if no heartbeat for N minutes
@@ -570,18 +571,15 @@ export default function Dashboard() {
     };
   }, [probation, probStats]);
 
-  const fmtTime = (ts: any) => {
-    const d = new Date(ts || Date.now());
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${hh}:${mm}`;
-  };
-  const fmtDateShort = (ts: any) => {
-    const d = new Date(ts || Date.now());
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    return `${dd}-${mm}`;
-  };
+  const fmtTime = (ts: any) =>
+  new Date(ts || Date.now()).toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Baghdad"
+  });
+
+const fmtDateShort = (ts: any) =>
+  new Date(ts || Date.now()).toLocaleDateString([], {
+    day: "2-digit", month: "2-digit", timeZone: "Asia/Baghdad"
+  });
 
   const recentRows = (logs as any[]).map((r: any, i: number) => {
     const ts = r.timestamp || r.time || r.created_at || r.date || Date.now();
@@ -837,7 +835,7 @@ if (role === 'accountant') {
                     const last = new Date(d.last_seen || d.lastHeartbeat || d.last_heartbeat || 0).getTime();
                     const stale = last ? now - last > cut : true;
                     const isOn = Boolean(d.online) && !stale;
-                    const lastFmt = last ? new Date(last).toLocaleString() : "-";
+                    const lastFmt = last ? formatLocalDateTime(last) : "-";
                     return (
                       <tr key={String(d.id || i)} className="hover:bg-muted/50 transition-colors border-b border-border/50">
                         <td className="px-2 py-3 font-mono text-xs">{String(d.id ?? "")}</td>

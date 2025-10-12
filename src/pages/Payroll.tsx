@@ -1,7 +1,6 @@
 // src/pages/Payroll.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, RefreshCw, Calendar, Building2 } from 'lucide-react'
-
 import { getPayroll, type PayrollRow } from '@/api/payroll'
 import { useAuthStore } from '@/store/auth'
 import RoleBadge from "@/components/RoleBadge";
@@ -17,8 +16,8 @@ const monthRange = (d = new Date()) => {
 export default function Payroll() {
   const role = useAuthStore(s => s.role?.toLowerCase?.() || 'manager')
   const allowed = role === 'admin' || role === 'hr'
-
   const [adoptedServerPeriod, setAdoptedServerPeriod] = useState(false)
+  const token = useAuthStore(s => s.token || '')
 
   // ▼▼ Branch options state (starts with "All")
   const [branchOptions, setBranchOptions] = useState<string[]>(['All'])
@@ -31,6 +30,9 @@ export default function Payroll() {
   const [rows, setRows] = useState<PayrollRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [penFile, setPenFile] = useState<File | null>(null)
+  const [advFile, setAdvFile] = useState<File | null>(null)
+  const [otherFile, setOtherFile] = useState<File | null>(null) // ← missing state added
 
   // --- De-dupe & stale-response guard (StrictMode-friendly) ---
   const inflightKeyRef = useRef<string>('')      // current (from|to|branch) being loaded
@@ -56,41 +58,114 @@ export default function Payroll() {
   // Branch options (solve empty)
   // ----------------------------
 
+  function resolveApiBase(): string {
+    const env: any = (import.meta as any)?.env || {};
+    const v =
+      env.VITE_API_BASE_URL ??
+      env.VITE_API_URL ??
+      (window as any)?.VITE_API_BASE_URL ??
+      (window as any)?.VITE_API_URL ??
+      '';
+    if (typeof v === 'string' && v) return v.replace(/\/+$/, '');
+    try {
+      const u = new URL(window.location.href);
+      // In dev, map Vite ports to API port 8000. Adjust if your API runs elsewhere.
+      const devPorts = new Set(['5173', '5174', '5175', '5137']);
+      const port = devPorts.has(u.port) ? '8000' : u.port;
+      return `${u.protocol}//${u.hostname}${port ? ':' + port : ''}`;
+    } catch {
+      return '';
+    }
+  }
+
   // 1) Primary source: GET /branches (with auth). Runs once.
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
+    let cancelled = false;
+    (async () => {
       try {
+        // Resolve API base
         const API_BASE: string = (() => {
+          const env = (import.meta as any)?.env || {};
           const v =
-            (import.meta as any)?.env?.VITE_API_BASE_URL ??
-            (window as any)?.VITE_API_BASE_URL ?? '';
-          return typeof v === 'string' ? v : '';
+            env.VITE_API_BASE_URL ??
+            env.VITE_API_URL ??
+            (window as any)?.VITE_API_BASE_URL ??
+            (window as any)?.VITE_API_URL ??
+            '';
+          if (typeof v === 'string' && v) return v.replace(/\/+$/, '');
+          try {
+            const u = new URL(window.location.href);
+            const devPorts = new Set(['5173', '5174', '5175', '5137']);
+            const port = devPorts.has(u.port) ? '8000' : u.port;
+            return `${u.protocol}//${u.hostname}${port ? ':' + port : ''}`;
+          } catch {
+            return '';
+          }
         })();
-        const token = localStorage.getItem('token') || sessionStorage.getItem('token') || ''
-        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
 
-        const res = await fetch(`${API_BASE}/branches`, { headers });
-        if (!res.ok) return;
+        if (!API_BASE) return;
 
-        const data: unknown = await res.json();
-        const list: unknown[] = Array.isArray(data)
-          ? (data as unknown[])
-          : Array.isArray((data as any)?.items)
-          ? ((data as any).items as unknown[])
-          : [];
+        // Auth header
+        if (!token) return; // don't call until token exists (prevents 401s)
+        const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-        const cleaned: string[] = Array.from(
-          new Set(list.map((b) => String(b).trim()).filter((s) => s.length > 0))
-        ).sort();
+        // Always keep the sentinel as "All" (UI renders it as "All branches")
+        let branchOpts: string[] = ['All'];
 
-        if (!cancelled && cleaned.length) setBranchOptions(['All', ...cleaned]);
+        // Try /branches first
+        try {
+          const res = await fetch(`${API_BASE}/branches`, {
+            headers,
+            method: 'GET',
+          });
+
+          if (res.status === 401 || res.status === 403) {
+            // Fallback: derive from /auth/me for scoped roles (e.g., Manager)
+            const meRes = await fetch(`${API_BASE}/auth/me`, {
+              headers,
+              method: 'GET',
+            });
+            if (meRes.ok) {
+              const me: any = await meRes.json();
+              const allowedRaw: unknown[] = Array.isArray(me?.allowed_branches)
+                ? me.allowed_branches
+                : (me?.branch ? [me.branch] : []);
+              const names = (allowedRaw as unknown[]).map((b: unknown) => {
+                if (typeof b === 'string') return b;
+                const name = (b as any)?.name ?? (b as any)?.branch ?? '';
+                return typeof name === 'string' ? name : '';
+              }).filter((s): s is string => Boolean(s));
+              if (names.length) {
+                branchOpts = ['All', ...Array.from(new Set(names))];
+              }
+            }
+          } else if (res.ok) {
+            const data: unknown = await res.json();
+            const list: unknown[] = Array.isArray(data)
+              ? data as unknown[]
+              : (Array.isArray((data as any)?.items) ? (data as any).items : []);
+            const names = list.map((b: unknown) => {
+              if (typeof b === 'string') return b;
+              const name = (b as any)?.name ?? (b as any)?.branch ?? '';
+              return typeof name === 'string' ? name : '';
+            }).filter((s): s is string => Boolean(s));
+            if (names.length) {
+              branchOpts = ['All', ...Array.from(new Set(names))];
+            }
+          }
+        } catch {
+          // Network/CORS hiccup → keep default
+        }
+
+        if (!cancelled) setBranchOptions(branchOpts);
       } catch {
         // swallow — we'll try fallback #2
       }
-    })()
-    return () => { cancelled = true }
-  }, [])
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   // 2) Fallback: derive unique branch names from loaded rows (first successful load)
   useEffect(() => {
@@ -188,6 +263,66 @@ export default function Payroll() {
     const a = document.createElement('a'); a.href = url; a.download = `payroll_${from}_to_${to}.csv`; a.click()
     URL.revokeObjectURL(url)
   }
+  
+  const exportPayslipsXLSX = async () => {
+    try {
+      const API_BASE = resolveApiBase();
+      const token = useAuthStore.getState().token || '';
+      if (!token) { alert('Please sign in again'); return; }
+
+      const qs = new URLSearchParams({ from, to, ...(branch && branch !== 'All' ? { branch } : {}) }).toString();
+      const exportUrl = `${API_BASE}/exports/payslips.xlsx?${qs}`;
+
+      let res: Response;
+      const hasUploads = !!(penFile || advFile || otherFile);
+
+      if (hasUploads) {
+        const fd = new FormData();
+        if (penFile)  fd.append('penalties', penFile);
+        if (advFile)  fd.append('advances', advFile);
+        if (otherFile) fd.append('other_allowance', otherFile)
+        res = await fetch(exportUrl, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: fd,
+          credentials: 'include'
+        });
+      } else {
+        res = await fetch(exportUrl, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
+        });
+      }
+
+      if (!res.ok) {
+        const ct = res.headers.get('content-type') || ''
+        const body = ct.includes('json') ? JSON.stringify(await res.json()) : await res.text()
+        alert(`Export failed (${res.status}): ${body.slice(0, 600)}`)
+        return
+      }
+
+      const ct = res.headers.get('content-type') || ''
+      if (!ct.includes('spreadsheetml')) {
+        const body = await res.text()
+        alert(`Export returned non-xlsx content-type (${ct}).
+First bytes:
+${body.slice(0, 600)}`)
+        return
+      }
+
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `payslips_${from}_to_${to}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('Export XLSX failed', e)
+      alert(String(e))
+    }
+  }
 
   if (!allowed) {
     return (
@@ -273,19 +408,19 @@ export default function Payroll() {
 
         <div className="flex flex-wrap items-end gap-4">
           <Field label="From Date" icon={<Calendar className="w-4 h-4" />}>
-            <input 
-              type="date" 
-              value={from} 
-              onChange={e => { setAdoptedServerPeriod(true); setFrom(e.target.value) }} 
-              className="w-full px-3 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm hover:border-blue-300" 
+            <input
+              type="date"
+              value={from}
+              onChange={e => { setAdoptedServerPeriod(true); setFrom(e.target.value) }}
+              className="w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-border text-foreground rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm hover:border-blue-300"
             />
           </Field>
           <Field label="To Date" icon={<Calendar className="w-4 h-4" />}>
-            <input 
-              type="date" 
-              value={to} 
-              onChange={e => { setAdoptedServerPeriod(true); setTo(e.target.value) }} 
-              className="w-full px-3 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm hover:border-blue-300" 
+            <input
+              type="date"
+              value={to}
+              onChange={e => { setAdoptedServerPeriod(true); setTo(e.target.value) }}
+              className="w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-border text-foreground rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm hover:border-blue-300"
             />
           </Field>
 
@@ -293,7 +428,7 @@ export default function Payroll() {
             <select
               value={branch}
               onChange={(e) => setBranch(e.target.value)}
-              className="w-full px-3 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm min-w-[160px] hover:border-blue-300"
+              className="w-full px-3 py-2.5 bg-white dark:bg-slate-800 border border-border text-foreground rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 text-sm min-w-[160px] hover:border-blue-300"
             >
               {branchOptions.map((b) => (
                 <option key={b} value={b}>
@@ -302,6 +437,20 @@ export default function Payroll() {
               ))}
             </select>
           </Field>
+
+          {/* Optional on-the-fly imports */}
+          <div className="flex items-center gap-3">
+            <label className="text-xs opacity-80">Penalties Excel
+              <input type="file" accept=".xlsx" onChange={e=>setPenFile(e.target.files?.[0]||null)} className="block text-xs" />
+            </label>
+            <label className="text-xs opacity-80">Advances Excel
+              <input type="file" accept=".xlsx" onChange={e=>setAdvFile(e.target.files?.[0]||null)} className="block text-xs" />
+            </label>
+            {/* Other Allowance Excel */}
+            <label className="text-xs opacity-80">Other Allowance Excel
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={e => setOtherFile(e.target.files?.[0] || null)} className="block text-xs" />
+            </label>
+          </div>
 
           <div className="flex gap-2">
             <button 
@@ -319,6 +468,14 @@ export default function Payroll() {
             >
               <Download className="w-4 h-4" />
               Export CSV
+            </button>
+            <button 
+              onClick={exportPayslipsXLSX} 
+              disabled={!rows.length} 
+              className="px-5 py-2.5 bg-gradient-to-r from-teal-500 to-teal-600 hover:from-teal-600 hover:to-teal-700 disabled:from-slate-400 disabled:to-slate-500 disabled:cursor-not-allowed text-white rounded-xl font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:transform-none transition-all duration-200 text-sm inline-flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" />
+              Export Payslips (XLSX)
             </button>
           </div>
         </div>
@@ -340,7 +497,6 @@ export default function Payroll() {
             </div>
           )}
         </div>
-
         <div className="overflow-x-auto rounded-xl border border-border/50">
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10">

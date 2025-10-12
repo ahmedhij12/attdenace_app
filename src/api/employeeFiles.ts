@@ -2,6 +2,7 @@
 
 import type { Employee as CoreEmployee } from "./employees";
 import { useAuthStore } from "@/store/auth";
+import client from './client';
 
 export type ID = string | number;
 
@@ -42,13 +43,21 @@ export type EmpPayrollMonth = {
   deductions: number;
   late_penalty: number;
   total_pay: number;
+    advances?: number;
   rows: Array<{
-    day: string;
-    hours: number;
-    food_allowance: number;
-    other_allowance: number;
-    deductions: number;
-    late_penalty: number;
+  day: string;
+  hours: number;
+  // canonical
+  food_allowance?: number;
+  other_allowance?: number;
+  deductions?: number;
+  late_penalty?: number;
+  // legacy/short keys used by the UI in places
+  food?: number;
+  other?: number;
+  deduct?: number;
+  late?: number;
+  advance?: number;
   }>;
 };
 
@@ -200,16 +209,90 @@ async function logsRaw(params: any): Promise<any[]> {
   return [];
 }
 
+// Add this small helper (near the other helpers in this file)
+function matchesMonth(obj: any, ym: string, from: string, to: string) {
+  const monthField =
+    String(obj?.month || obj?.for_month || obj?.period || obj?.month_name || '').slice(0, 7);
+  const fromField = String(obj?.from || obj?.start || obj?.date_from || '').slice(0, 10);
+  const toField   = String(obj?.to   || obj?.end   || obj?.date_to   || '').slice(0, 10);
+
+  if (monthField) return monthField === ym;
+  if (fromField && toField) return fromField === from && toField === to;
+
+  // Fallback heuristics if the object doesn’t label the month explicitly
+  if (Array.isArray(obj?.rows)) {
+    const days = obj.rows
+      .map((r: any) => String(r.date || r.day || '').slice(0, 10))
+      .filter(Boolean);
+    return days.some((d) => d.startsWith(ym));
+  }
+  if (obj?.days && typeof obj.days === 'object') {
+    return Object.keys(obj.days).some((k) => String(k).startsWith(ym));
+  }
+  // Unknown shape → don’t block
+  return true;
+}
+
+// FULL REPLACEMENT
 async function payrollRaw(params: { employee_id: ID; month: string }): Promise<any> {
   const month = monthClamp(params.month);
-  const res = await tryHttp<any>([
-    `/employee_files/payroll${qs({ ...params, month })}`,
-    `/payroll${qs({ ...params, month })}`,
-    `/api/employee_files/payroll${qs({ ...params, month })}`,
-    `/api/payroll${qs({ ...params, month })}`,
+
+  // Resolve UID (robust to different shapes)
+  const ov = await tryHttp<any>([
+    `/employee_files/${params.employee_id}/overview`,
+    `/api/employee_files/${params.employee_id}/overview`,
+    `/employees/${params.employee_id}`,
+    `/api/employees/${params.employee_id}`,
   ]);
-  return Array.isArray(res) ? (res[0] ?? null) : res;
+  const uid: string = String(
+    ov?.employee?.uid || ov?.employee?.code || ov?.uid || ov?.code || ''
+  ).toUpperCase();
+
+  // Month -> range (m is 1..12 here)
+  const [y, m] = month.split('-').map((n) => parseInt(n, 10));
+  const mm = String(m).padStart(2, '0');
+  const from = `${y}-${mm}-01`;
+  const lastDay = new Date(y, m, 0).getDate(); // FIX: m is 1-based → use (y, m, 0)
+  const to = `${y}-${mm}-${String(lastDay).padStart(2, '0')}`;
+  const wantMonth = `${y}-${mm}`;
+
+  // Prefer your proxy first (it normalizes upstream quirks),
+  // then try direct /payroll variants. We only ACCEPT payloads that match the requested month.
+  const variants = [
+    `/employee_files/payroll${qs({ employee_id: params.employee_id, month: wantMonth })}`,
+    `/api/employee_files/payroll${qs({ employee_id: params.employee_id, month: wantMonth })}`,
+
+    // Range (uid/id)
+    `/payroll${qs({ employee_uid: uid, from, to })}`,
+    `/api/payroll${qs({ employee_uid: uid, from, to })}`,
+    `/payroll${qs({ employee_id: params.employee_id, from, to })}`,
+    `/api/payroll${qs({ employee_id: params.employee_id, from, to })}`,
+
+    // Month (uid/id)
+    `/payroll${qs({ employee_uid: uid, month: wantMonth })}`,
+    `/api/payroll${qs({ employee_uid: uid, month: wantMonth })}`,
+    `/payroll${qs({ employee_id: params.employee_id, month: wantMonth })}`,
+    `/api/payroll${qs({ employee_id: params.employee_id, month: wantMonth })}`,
+  ];
+
+  let lastErr: any = null;
+  for (const url of variants) {
+    try {
+      const res = await http<any>(url);
+      const obj = Array.isArray(res)
+        ? (res.find((r: any) => String(r?.uid || r?.code).toUpperCase() === uid) ?? res[0] ?? null)
+        : res;
+
+      if (!obj) continue;
+      if (!matchesMonth(obj, wantMonth, from, to)) continue; // ← only accept the right month
+      return obj;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr ?? new Error('No payroll variant succeeded');
 }
+
 
 async function deductionsRaw(params: { employee_id: ID; month?: string }): Promise<any[]> {
   const month = monthClamp(params.month);
@@ -262,8 +345,8 @@ export async function listEmployeeFiles(params: { q?: string; include_archived?:
 export async function getLogs(employeeId: ID, from?: string, to?: string): Promise<EmpLog[]> {
   const raw = await logsRaw({
     employee_id: employeeId,
-    date_from: from ? new Date(from).toISOString() : undefined,
-    date_to: to ? new Date(to).toISOString() : undefined,
+    date_from: from || undefined,
+    date_to: to || undefined,
     page: 1,
     page_size: 1000,
     sort: "desc",
@@ -279,8 +362,8 @@ export async function getLogs(employeeId: ID, from?: string, to?: string): Promi
         : undefined;
     return {
       id: l.id,
-      in: l.in ?? l.timestamp,
-      out: l.out ?? null,
+      in: (l.in ?? l.ts_in ?? l.check_in ?? l.date_in ?? l.datetime_in ?? null),
+      out: (l.out ?? l.ts_out ?? l.check_out ?? l.date_out ?? l.datetime_out ?? null),
       device: l.device ?? l.source ?? "",
       hours,
       type: l.type,
@@ -478,6 +561,22 @@ export async function deleteEmpAdvance(employeeId: ID, id: ID, reason?: string) 
   throw lastErr || new Error('Failed to delete advance')
 }
 
+// --- bulk employee operations ---
+export async function bulkDeleteEmployees(employeeIds: ID[]): Promise<void> {
+  const path = `/api/exports/employees/bulk-delete-ids`;
+  const body = { employee_ids: employeeIds.map(id => Number(id)) };
+  
+  try {
+    await http<void>(path, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+  } catch (error: any) {
+    console.error('Bulk delete failed:', error);
+    throw new Error(error?.message || 'Failed to delete selected employees');
+  }
+}
+
 export async function getEmployeeOverview(employeeId: ID) {
   try {
     const data = await tryHttp<any>([
@@ -505,8 +604,17 @@ export async function getEmployeeOverview(employeeId: ID) {
 
 export async function getPayroll(employeeId: ID, month: string): Promise<EmpPayrollMonth> {
   const raw = await payrollRaw({ employee_id: employeeId, month });
+
+  // rows[]: prefer array if provided; otherwise map days{} (dict) to rows[]
   const rowsSrc = raw?.rows ?? raw?.days ?? raw?.details ?? [];
-  const rowsArr = Array.isArray(rowsSrc) ? rowsSrc : [];
+  const rowsArr: any[] = Array.isArray(rowsSrc)
+    ? rowsSrc
+    : (raw?.days && typeof raw.days === 'object'
+        ? Object.entries(raw.days)
+            .map(([day, hours]) => ({ day, hours: Number(hours) || 0 }))
+            .sort((a, b) => a.day.localeCompare(b.day))
+        : []);
+
   const rows = rowsArr.map((d: any, i: number) => ({
     day: d.day ?? d.date ?? String(i + 1).padStart(2, "0"),
     hours: d.hours ?? d.h ?? d.total_hours ?? 0,
@@ -515,16 +623,26 @@ export async function getPayroll(employeeId: ID, month: string): Promise<EmpPayr
     deductions: d.deductions ?? d.deduct ?? 0,
     late_penalty: d.late_penalty ?? d.late ?? 0,
   }));
+
+  // totals: handle top-level or nested 'totals'
+  const tot = raw?.totals || {};
   return {
-    hours_total: raw?.hours_total ?? raw?.hours ?? raw?.total_hours ?? 0,
-    food_allowance: raw?.food_allowance ?? 0,
-    other_allowance: raw?.other_allowance ?? 0,
-    deductions: raw?.deductions ?? raw?.deductions_total ?? 0,
-    late_penalty: raw?.late_penalty ?? 0,
-    total_pay: raw?.total_pay ?? raw?.net_pay ?? 0,
+    hours_total:
+      raw?.hours_total ?? raw?.hours ?? raw?.total_hours ?? tot.hours ?? 0,
+    food_allowance:
+      raw?.food_allowance ?? tot.food_allowance_iqd ?? 0,
+    other_allowance:
+      raw?.other_allowance ?? tot.other_allowance_iqd ?? 0,
+    deductions:
+      raw?.deductions ?? raw?.deductions_total ?? tot.deductions_iqd ?? 0,
+    late_penalty:
+      raw?.late_penalty ?? tot.late_penalty_iqd ?? 0,
+    total_pay:
+      raw?.total_pay ?? raw?.net_pay ?? tot.total_pay_iqd ?? tot.total ?? 0,
     rows,
   };
 }
+
 export async function getDeductions(employeeId: ID, month?: string): Promise<EmpDeduction[]> {
   try {
     const raw = await deductionsRaw({ employee_id: employeeId, month });
@@ -582,22 +700,47 @@ export function exportLogsXlsxUrl(employeeId: ID, from?: string, to?: string): {
 }
 
 const employeeFileApi = {
-  listEmployees: listEmployeeFiles,
+  // lists
   listEmployeeFiles,
+
+  // overview/payroll
   getOverview: getEmployeeOverview,
-  getEmployeeOverview,
-  getLogs,
   getPayroll,
+
+  // deductions
   getDeductions,
   createEmpDeduction,
   updateEmpDeduction,
   deleteEmpDeduction,
-  getSalaryHistory,
-  exportLogsXlsxUrl,
+
+  // advances
   getAdvances,
   createEmpAdvance,
   updateEmpAdvance,
   deleteEmpAdvance,
+
+  // exports
+  exportLogsXlsxUrl,
+
+  // bulk operations
+  bulkDeleteEmployees,
 };
 
 export default employeeFileApi;
+
+// --- export: payslip ---
+export async function exportPayslipXlsx(employee_id: number, month: string) {
+  const base = API_BASE;
+  const url = `${base}/employee_files/payslip.xlsx?employee_id=${employee_id}&month=${encodeURIComponent(month)}`;
+  const res = await fetch(url, { credentials: 'include' });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  return await res.blob();
+}
+
+export async function exportPayslipCsv(employee_id: number, month: string) {
+  const base = API_BASE;
+  const url = `${base}/employee_files/payslip.csv?employee_id=${employee_id}&month=${encodeURIComponent(month)}`;
+  const res = await fetch(url, { credentials: 'include' });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  return await res.blob();
+}

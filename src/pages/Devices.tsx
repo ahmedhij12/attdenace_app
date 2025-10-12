@@ -3,6 +3,7 @@ import { BRANCHES } from '@/api/client'
 import type { DeviceInfo } from '@/types/models'
 import { useAuthStore } from '@/store/auth'
 import RoleBadge from "@/components/RoleBadge";
+import { formatLocalDateTime } from "@/features/employeeFiles/utils/time";
 
 
 type Me = {
@@ -99,30 +100,45 @@ export default function Devices() {
 
   async function apiRegenKey(id: number): Promise<string> {
     const endpoints = [
+      `${getApiBase()}/devices/${id}/regenerate_key`, // ← native, exact backend route
       `${getApiBase()}/devices/${id}/regenerate`,
       `${getApiBase()}/devices/${id}/key`,
       `${getApiBase()}/devices/${id}/regen`,
+      `${getApiBase()}/devices/${id}/generate`,
     ]
+    const errors: string[] = []
     for (const url of endpoints) {
       try {
         const res = await fetch(url, {
           method: 'POST',
           headers: { ...tokenHeader(), 'Content-Type': 'application/json' },
         })
-        if (!res.ok) continue
+        if (!res.ok) {
+          const errText = await res.text().catch(() => `HTTP ${res.status}`)
+          errors.push(`${url}: ${errText}`)
+          continue
+        }
         const data: any = await res.json().catch(() => ({}))
-        return String(data.key ?? data.api_key ?? data.device_key ?? data.secret ?? data.token ?? '')
-      } catch { /* try next */ }
+        const key = String(data.key ?? data.api_key ?? data.device_key ?? data.secret ?? data.token ?? '')
+        if (key) return key
+        errors.push(`${url}: No key in response`)
+      } catch (err: any) {
+        errors.push(`${url}: ${err?.message ?? 'Network error'}`)
+      }
     }
-    throw new Error('Failed to regenerate device key')
+    throw new Error(`Failed to regenerate device key. Tried ${endpoints.length} endpoints: ${errors.join(', ')}`)
   }
+
 
   async function apiDeleteDevice(id: number): Promise<void> {
     const res = await fetch(`${getApiBase()}/devices/${id}`, {
       method: 'DELETE',
       headers: { ...tokenHeader() },
     })
-    if (!res.ok) throw new Error(await res.text().catch(()=> 'Failed to delete device'))
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      throw new Error(errText || `Failed to delete device (HTTP ${res.status})`)
+    }
   }
 
   /// -------- user profile --------
@@ -251,14 +267,33 @@ useEffect(() => {
   }
   async function regen(id: number) {
     if (isManager) { alert('Read-only role: managers cannot regenerate keys.'); return }
-    try { const key = await apiRegenKey(id); setNewKey(key) }
-    catch (e:any) { alert(e?.message ?? 'Failed to regenerate key') }
+    setLoading(true); setError(null)
+    try {
+      const key = await apiRegenKey(id)
+      if (!key) throw new Error('Regeneration returned empty key')
+      setNewKey(key)
+    }
+    catch (e:any) {
+      const msg = e?.message ?? 'Failed to regenerate key'
+      setError(msg)
+      console.error('Regenerate key error:', e)
+    }
+    finally { setLoading(false) }
   }
   async function remove(id: number) {
     if (isManager) { alert('Read-only role: managers cannot delete devices.'); return }
     if (!confirm('Delete device?')) return
-    try { setLoading(true); await apiDeleteDevice(id); await load(); await loadOptions() }
-    catch (e:any) { setError(e?.message ?? 'Failed to delete device') }
+    setLoading(true); setError(null)
+    try {
+      await apiDeleteDevice(id)
+      await load()
+      await loadOptions()
+    }
+    catch (e:any) {
+      const msg = e?.message ?? 'Failed to delete device'
+      setError(msg)
+      console.error('Delete device error:', e)
+    }
     finally { setLoading(false) }
   }
 
@@ -373,7 +408,7 @@ useEffect(() => {
                     </td>
                     <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{d.port || '-'}</td>
                     <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{d.ip || '-'}</td>
-                    <td className="px-3 py-3 text-xs text-muted-foreground">{d.lastSeen ? new Date(d.lastSeen).toLocaleString() : '-'}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">{d.lastSeen ? formatLocalDateTime(d.lastSeen) : '-'}</td>
                     {!isManager && (
                     <td className="px-3 py-3 text-right space-x-2">
                       <button 
