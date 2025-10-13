@@ -136,25 +136,44 @@ function scavengePerDay(node: any): Record<string, number> {
 }
 
 
-// ---- delete helper (tries both bare and /api/ prefix) ----
+// ---- delete helper (uses proper API base and endpoints) ----
 async function deleteEmployeeById(empId: number, hard = false): Promise<boolean> {
   const token = useAuthStore.getState().token
   if (!token) return false
   const auth = token.startsWith('Bearer ') ? token : `Bearer ${token}`
 
+  // Use the same API_BASE that's defined in this file
   const endpoints = hard
-    ? [`/employees/${empId}/purge`, `/api/employees/${empId}/purge`]
-    : [`/employees/${empId}`, `/api/employees/${empId}`]
+    ? [`${API_BASE}/employees/${empId}/purge`, `${API_BASE}/api/employees/${empId}/purge`]
+    : [`${API_BASE}/employees/${empId}`, `${API_BASE}/api/employees/${empId}`]
 
   for (const path of endpoints) {
     try {
+      console.log(`Attempting to delete employee ${empId} via ${path}`)
       const r = await fetch(path, {
         method: 'DELETE',
-        headers: { Accept: 'application/json', Authorization: auth },
+        headers: { 
+          Accept: 'application/json', 
+          Authorization: auth,
+          'Content-Type': 'application/json'
+        },
         credentials: 'include',
       })
-      if (r.ok) return true
-    } catch {}
+      
+      if (r.ok) {
+        console.log(`Successfully deleted employee ${empId} via ${path}`)
+        return true
+      } else {
+        console.log(`Delete failed for ${path}: ${r.status} ${r.statusText}`)
+        // Try to read error response
+        try {
+          const errorText = await r.text()
+          console.log(`Error response: ${errorText}`)
+        } catch {}
+      }
+    } catch (error) {
+      console.error(`Error calling ${path}:`, error)
+    }
   }
   return false
 }
@@ -3093,8 +3112,12 @@ This cannot be undone. Continue?`)) {
       setDeleteResults(null)
       const idsArray = Array.from(selectedIds)
       
+      console.log(`Starting bulk delete for ${idsArray.length} employees:`, idsArray)
+      
       // Use the API function instead of direct fetch
-      await bulkDeleteEmployees(idsArray)
+      const result = await bulkDeleteEmployees(idsArray)
+      
+      console.log('Bulk delete completed successfully:', result)
 
       // Update local employee list by removing deleted employees
       setEmployees(prev => prev.filter(emp => !selectedIds.has(emp.id)))
@@ -3107,11 +3130,19 @@ This cannot be undone. Continue?`)) {
       setSelectedIds(new Set())
       setSelectAll(false)
       
+      // Show success message
+      setMsg(`Successfully deleted ${selectedIds.size} employees and all related data`)
+      
       // Notify parent component if needed
       onCreated && onCreated({ bulk: true, count: -selectedIds.size })
 
     } catch (error: any) {
-      setMsg(`Bulk delete failed: ${error.message}`)
+      console.error('Bulk delete failed:', error)
+      setMsg(`Bulk delete failed: ${error.message || 'Unknown error occurred'}`)
+      setDeleteResults({
+        deleted: 0,
+        errors: [error.message || 'Unknown error occurred']
+      })
     } finally {
       setDeleting(false)
     }

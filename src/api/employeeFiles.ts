@@ -562,17 +562,27 @@ export async function deleteEmpAdvance(employeeId: ID, id: ID, reason?: string) 
 }
 
 // --- bulk employee operations ---
-export async function bulkDeleteEmployees(employeeIds: ID[]): Promise<void> {
+export async function bulkDeleteEmployees(employeeIds: ID[]): Promise<any> {
   const path = `/api/exports/employees/bulk-delete-ids`;
   const body = { employee_ids: employeeIds.map(id => Number(id)) };
   
+  console.log(`Bulk delete API call - Path: ${path}, Body:`, body);
+  
   try {
-    await http<void>(path, {
+    const result = await http<any>(path, {
       method: 'POST',
       body: JSON.stringify(body)
     });
+    
+    console.log('Bulk delete API response:', result);
+    return result;
   } catch (error: any) {
-    console.error('Bulk delete failed:', error);
+    console.error('Bulk delete API failed:', error);
+    console.error('Error details:', {
+      status: error?.status,
+      data: error?.data,
+      message: error?.message
+    });
     throw new Error(error?.message || 'Failed to delete selected employees');
   }
 }
