@@ -563,7 +563,7 @@ export async function deleteEmpAdvance(employeeId: ID, id: ID, reason?: string) 
 
 // --- bulk employee operations ---
 export async function bulkDeleteEmployees(employeeIds: ID[]): Promise<any> {
-  const path = `/api/exports/employees/bulk-delete-ids`;
+  const path = `/exports/employees/bulk-delete-ids`;
   const body = { employee_ids: employeeIds.map(id => Number(id)) };
   
   console.log(`Bulk delete API call - Path: ${path}, Body:`, body);
