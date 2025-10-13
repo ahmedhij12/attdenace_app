@@ -358,7 +358,8 @@ const [editAdvReason, setEditAdvReason] = useState<string>('')
   employment_type: (emp as any).employment_type ?? 'wages',
   hourly_rate: (emp as any).hourly_rate ?? '',
   salary_iqd: (emp as any).salary_iqd ?? '',
-  uid: (emp as any).uid ?? (emp as any).code ?? '',           // ✅ NEW
+  code: (emp as any).code ?? '',
+  uid: (emp as any).uid ?? '',
 }))
 // ...
 useEffect(() => {
@@ -370,8 +371,8 @@ setEditVals((v: any) => ({
   employment_type: overview?.employment_type ?? (emp as any).employment_type ?? 'wages',
   hourly_rate:   overview?.hourly_rate   ?? (emp as any).hourly_rate   ?? '',
   salary_iqd:    overview?.salary_iqd    ?? (emp as any).salary_iqd    ?? '',
-  uid: (overview as any)?.uid ?? (overview as any)?.code
-      ?? (emp as any).uid ?? (emp as any).code ?? '',         // ✅ NEW
+  code: (overview as any)?.employee?.code ?? (emp as any).code ?? '',
+  uid: (overview as any)?.employee?.uid ?? (emp as any).uid ?? '',
 }))
 
   }, [overview, (emp as any).id])
@@ -1500,7 +1501,7 @@ const exportLogs = () => {
                 <div>
                   <h2 className="text-xl font-bold text-slate-900 dark:text-white">{(emp as any).name}</h2>
                   <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Code: {(emp as any).code || (emp as any).uid || '—'}
+                    Code: {(emp as any).code || '—'}
                     {(emp as any).branch && ` • ${(emp as any).branch}`}
                   </p>
                 </div>
@@ -1667,13 +1668,34 @@ This cannot be undone. Continue?`
                           </span>
                         </div>
 
+                        {/* Code (editable) */}
+                        <div className="flex justify-between items-center gap-3">
+                          <span className="text-slate-600 dark:text-slate-400">Code:</span>
+                          {!editing ? (
+                            <span className="font-medium text-slate-900 dark:text-white">
+                              {(overview as any)?.employee?.code ?? (emp as any)?.code ?? '—'}
+                            </span>
+                          ) : (
+                            <input
+                              className="px-2 py-1 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-sm w-48"
+                              value={editVals.code}
+                              onChange={(e) =>
+                                setEditVals((prev: any) => ({
+                                  ...(prev ?? {}),
+                                  code: String(e.target.value || '').trim(),
+                                }))
+                              }
+                              placeholder="e.g., EMP001"
+                            />
+                          )}
+                        </div>
+
                         {/* UID (editable) */}
                         <div className="flex justify-between items-center gap-3">
                           <span className="text-slate-600 dark:text-slate-400">UID:</span>
                           {!editing ? (
                             <span className="font-medium text-slate-900 dark:text-white">
-                              {(overview as any)?.employee?.uid ?? (overview as any)?.employee?.code
-                                ?? (emp as any)?.uid ?? (emp as any)?.code ?? '—'}
+                              {(overview as any)?.employee?.uid ?? (emp as any)?.uid ?? '—'}
                             </span>
                           ) : (
                             <input
@@ -1839,8 +1861,8 @@ This cannot be undone. Continue?`
                                       department: String(editVals.department || curr.department || ''), // NEW
                                       branch: String(editVals.branch || curr.branch || ''),
                                       brand: String(editVals.brand || curr.brand || ''),               // NEW
-                                      uid: String((editVals.uid || curr.uid || curr.code || '')).toUpperCase(),
-                                      code: curr.code ?? '',
+                                      uid: String((editVals.uid || curr.uid || '')).toUpperCase(),
+                                      code: String(editVals.code || curr.code || '').trim(),
                                       employment_type: String(editVals.employment_type || curr.employment_type || 'wages'),
                                       hourly_rate: String(editVals.employment_type || curr.employment_type) === 'wages'
                                         ? Number((editVals.hourly_rate ?? curr.hourly_rate) || 0)
