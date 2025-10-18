@@ -14,26 +14,64 @@ import { formatMinutes } from '@/features/employeeFiles/utils';
 import { formatLocalDateTime } from '@/features/employeeFiles/utils/time';
 import { BRAND_OPTIONS } from '@/constants/brands';
 
-// ---- delete helper (tries both bare and /api/ prefix) ----
+// ---- FIXED: Enhanced delete helper with proper API base and error handling ----
 async function deleteEmployeeById(empId: number, hard = false): Promise<boolean> {
   const token = useAuthStore.getState().token
-  if (!token) return false
+  const apiBase = useAuthStore.getState().apiBase
+  
+  if (!token) {
+    console.error('No token available for delete operation')
+    return false
+  }
+  
   const auth = token.startsWith('Bearer ') ? token : `Bearer ${token}`
 
+  // FIXED: Try the correct endpoints with proper API base
   const endpoints = hard
-    ? [`/employees/${empId}/purge`, `/api/employees/${empId}/purge`]
-    : [`/employees/${empId}`, `/api/employees/${empId}`]
+    ? [
+        `${apiBase}/employees/${empId}/purge`,
+        `/api/employees/${empId}/purge`, 
+        `/employees/${empId}/purge`
+      ]
+    : [
+        `${apiBase}/employees/${empId}`,
+        `/api/employees/${empId}`, 
+        `/employees/${empId}`
+      ]
+
+  console.log(`Attempting to delete employee ${empId}, hard=${hard}`)
+  console.log('Trying endpoints:', endpoints)
 
   for (const path of endpoints) {
     try {
+      console.log(`Trying DELETE ${path}`)
+      
       const r = await fetch(path, {
         method: 'DELETE',
-        headers: { Accept: 'application/json', Authorization: auth },
+        headers: { 
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': auth 
+        },
         credentials: 'include',
       })
-      if (r.ok) return true
-    } catch {}
+      
+      console.log(`Response: ${r.status} ${r.statusText}`)
+      
+      if (r.ok) {
+        const responseData = await r.json()
+        console.log('Delete response:', responseData)
+        return true
+      } else {
+        const errorText = await r.text()
+        console.error(`Delete failed for ${path}:`, r.status, errorText)
+      }
+    } catch (error) {
+      console.error(`Error deleting via ${path}:`, error)
+    }
   }
+  
+  console.error(`All delete endpoints failed for employee ${empId}`)
   return false
 }
 
@@ -205,31 +243,56 @@ export default function EmployeeFilePage() {
   return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
-
+  // FIXED: Enhanced createEmployeeWithFallback with proper API base and error handling
   async function createEmployeeWithFallback(payload: any, tk: string | null | undefined) {
     if (!tk) throw new Error('Unauthorized')
+    
+    const apiBase = useAuthStore.getState().apiBase
     const auth = tk.startsWith('Bearer ') ? tk : `Bearer ${tk}`
     const body = sanitizeEmployeePayload(payload)
 
-    for (const path of ['/employees', '/api/employees']) {
+    console.log('Creating employee with payload:', body)
+    console.log('API Base:', apiBase)
+
+    // FIXED: Use correct endpoints with API base
+    const endpoints = [
+      `${apiBase}/employees`,
+      `/api/employees`,
+      `/employees`
+    ]
+
+    for (const path of endpoints) {
       try {
+        console.log(`Trying POST ${path}`)
+        
         const resp = await fetch(path, {
           method: 'POST',
           headers: {
-            Accept: 'application/json',
+            'Accept': 'application/json',
             'Content-Type': 'application/json',
-            Authorization: auth,
+            'Authorization': auth,
           },
           credentials: 'include',
           body: JSON.stringify(body),
         })
-        if (!resp.ok) continue
-        const ct = resp.headers.get('content-type') || ''
-        const data = /json/i.test(ct) ? await resp.json() : null
-        return data && typeof data === 'object' ? (data.data ?? data) : body
-      } catch {}
+        
+        console.log(`Response: ${resp.status} ${resp.statusText}`)
+        
+        if (resp.ok) {
+          const ct = resp.headers.get('content-type') || ''
+          const data = /json/i.test(ct) ? await resp.json() : null
+          console.log('Create response:', data)
+          return data && typeof data === 'object' ? (data.data ?? data) : body
+        } else {
+          const errorText = await resp.text()
+          console.error(`Create failed for ${path}:`, resp.status, errorText)
+        }
+      } catch (error) {
+        console.error(`Error creating via ${path}:`, error)
+      }
     }
-    throw new Error('Create failed')
+    
+    throw new Error('Create failed: All endpoints unreachable. Check server and Cloudflare configuration.')
   }
 
   // -------- Load --------
@@ -333,32 +396,92 @@ export default function EmployeeFilePage() {
     }
   }
 
+  // FIXED: Enhanced bulk delete using proper bulk endpoint
   const handleBulkDelete = async () => {
-  if (selectedIds.size === 0) return
+    if (selectedIds.size === 0) return
 
-  if (!confirm(`Are you sure you want to permanently delete ${selectedIds.size} selected employees? This action cannot be undone.`)) {
-    return
+    if (!confirm(`Are you sure you want to permanently delete ${selectedIds.size} selected employees? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      setDeleting(true)
+
+      // FIXED: Use the proper bulk delete endpoint instead of individual deletes
+      const apiBase = useAuthStore.getState().apiBase
+      const token = useAuthStore.getState().token
+      const auth = token?.startsWith('Bearer ') ? token : `Bearer ${token}`
+      
+      const employeeIds = Array.from(selectedIds)
+      
+      console.log('Sending bulk delete request for IDs:', employeeIds) // Debug logging
+      
+      // Try the correct bulk delete endpoints
+      const bulkDeleteEndpoints = [
+        `${apiBase}/exports/employees/bulk-delete-ids`,
+        `/api/exports/employees/bulk-delete-ids`,
+        `/exports/employees/bulk-delete-ids`
+      ]
+      
+      let success = false
+      let response: any = null
+      
+      for (const endpoint of bulkDeleteEndpoints) {
+        try {
+          console.log(`Trying bulk delete endpoint: ${endpoint}`)
+          
+          const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'Authorization': auth,
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              employee_ids: employeeIds
+            })
+          })
+          
+          console.log(`Response status: ${resp.status}`, resp)
+          
+          if (resp.ok) {
+            response = await resp.json()
+            console.log('Bulk delete response:', response)
+            success = true
+            break
+          } else {
+            const errorText = await resp.text()
+            console.error(`Endpoint ${endpoint} failed:`, resp.status, errorText)
+          }
+        } catch (error) {
+          console.error(`Error with endpoint ${endpoint}:`, error)
+          continue
+        }
+      }
+      
+      if (!success) {
+        throw new Error('All bulk delete endpoints failed. Check server logs.')
+      }
+
+      // Update UI state
+      setItems(prev => prev.filter(emp => !selectedIds.has(emp.id)))
+      setSelectedIds(new Set())
+      setSelectAll(false)
+
+      const deletedCount = response?.deleted_count || selectedIds.size
+      alert(`Successfully deleted ${deletedCount} employees permanently.`)
+      
+      // Refresh the list to ensure UI is in sync
+      window.location.reload()
+
+    } catch (error: any) {
+      console.error('Bulk delete error:', error)
+      alert(`Bulk delete failed: ${error.message}`)
+    } finally {
+      setDeleting(false)
+    }
   }
-
-  try {
-    setDeleting(true)
-
-    await Promise.all(
-      Array.from(selectedIds).map(id => deleteEmployeeById(id, true)) // <-- hard delete!
-    )
-
-    setItems(prev => prev.filter(emp => !selectedIds.has(emp.id)))
-    setSelectedIds(new Set())
-    setSelectAll(false)
-
-    alert(`Successfully deleted ${selectedIds.size} employees permanently.`)
-
-  } catch (error: any) {
-    alert(`Bulk delete failed: ${error.message}`)
-  } finally {
-    setDeleting(false)
-  }
-}
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 dark:from-slate-900 dark:to-slate-800">
