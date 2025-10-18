@@ -32,7 +32,7 @@ export type EmpDeductionUpsert = {
   date?: string;
   month?: string;
   amount_iqd: number;
-  note?: string;     // UI calls this “reason” sometimes; we normalize below
+  note?: string;     // UI calls this "reason" sometimes; we normalize below
   reason?: string;   // accepted for convenience; mapped to note
 };
 
@@ -102,12 +102,16 @@ function resolveApiBase(): string {
   const viaEnv =
     env.VITE_API_BASE_URL || env.VITE_API_BASE || env.VITE_API_URL || env.VITE_API || "";
   let base = String(viaEnv || "").trim().replace(/\/+$/g, "");
-  if (!base && (typeof location !== 'undefined' && (location.hostname === "localhost" || location.hostname === "127.0.0.1"))) {
-    base = "http://127.0.0.1:8000";
+  
+  if (base) {
+    console.log('[EmployeeFiles] Using API base from env:', base);
+    return base;
   }
-  return base;
+  
+  // FIXED: Always use production API instead of localhost fallback
+  console.log('[EmployeeFiles] No env variable found, using production API');
+  return "https://api.hijazionline.org";
 }
-
 
 const API_BASE = resolveApiBase();
 
@@ -137,7 +141,6 @@ function withAuth(init: RequestInit = {}): RequestInit {
   if (t) headers["Authorization"] = `Bearer ${t}`;
   return { ...init, headers };
 }
-
 
 async function http<T = any>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
@@ -219,7 +222,7 @@ function matchesMonth(obj: any, ym: string, from: string, to: string) {
   if (monthField) return monthField === ym;
   if (fromField && toField) return fromField === from && toField === to;
 
-  // Fallback heuristics if the object doesn’t label the month explicitly
+  // Fallback heuristics if the object doesn't label the month explicitly
   if (Array.isArray(obj?.rows)) {
     const days = obj.rows
       .map((r: any) => String(r.date || r.day || '').slice(0, 10))
@@ -229,7 +232,7 @@ function matchesMonth(obj: any, ym: string, from: string, to: string) {
   if (obj?.days && typeof obj.days === 'object') {
     return Object.keys(obj.days).some((k) => String(k).startsWith(ym));
   }
-  // Unknown shape → don’t block
+  // Unknown shape → don't block
   return true;
 }
 
@@ -292,7 +295,6 @@ async function payrollRaw(params: { employee_id: ID; month: string }): Promise<a
   }
   throw lastErr ?? new Error('No payroll variant succeeded');
 }
-
 
 async function deductionsRaw(params: { employee_id: ID; month?: string }): Promise<any[]> {
   const month = monthClamp(params.month);
@@ -376,8 +378,6 @@ export async function getLogs(employeeId: ID, from?: string, to?: string): Promi
   });
 }
 
-
-
 /** Create a deduction for a specific employee (by numeric ID). */
 export async function createEmpDeduction(
   employeeId: ID,
@@ -442,8 +442,6 @@ export async function updateEmpDeduction(
   }
   throw lastErr || new Error("Failed to update deduction");
 }
-
-
 
 export async function deleteEmpDeduction(
   employeeId: ID,

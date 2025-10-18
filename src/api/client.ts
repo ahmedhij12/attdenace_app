@@ -15,14 +15,8 @@ function resolveApiBase(): string {
     return fromEnv;
   }
 
-  // IMPROVED FALLBACK LOGIC
+  // FIXED: Always prefer production API URL
   const u = new URL(window.location.href);
-  
-  // Development: localhost:5173 -> localhost:8000
-  if (u.port === "5173") {
-    console.log('[API Client] Development mode: Using localhost:8000');
-    return `${u.protocol}//${u.hostname}:8000`;
-  }
   
   // Production: app.hijazionline.org -> api.hijazionline.org
   if (u.hostname === "app.hijazionline.org") {
@@ -30,10 +24,9 @@ function resolveApiBase(): string {
     return "https://api.hijazionline.org";
   }
   
-  // Default fallback for other environments
-  const fallback = `${u.protocol}//${u.hostname}${u.port ? ":" + u.port : ""}`;
-  console.log('[API Client] Using fallback API base:', fallback);
-  return fallback;
+  // FIXED: Default to production API for all other cases including localhost
+  console.log('[API Client] Using production API base');
+  return "https://api.hijazionline.org";
 }
 
 class ApiClient {

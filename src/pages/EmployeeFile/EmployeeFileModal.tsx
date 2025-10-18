@@ -31,7 +31,13 @@ import PayrollTab from './PayrollTab';
 import DeductionsTab from './DeductionsTab';
 
   const env = (import.meta as any)?.env || {};
-  const API_BASE = String(env.VITE_API_BASE || env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+  const API_BASE = String(
+  env.VITE_API_BASE || 
+  env.VITE_API_URL || 
+  env.VITE_API_BASE_URL || 
+  env.VITE_API || 
+  'https://api.hijazionline.org'  // FIXED: Use production API instead of localhost
+).replace(/\/+$/, '');
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
