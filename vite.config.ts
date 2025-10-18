@@ -25,15 +25,15 @@ export default defineConfig({
       protocol: 'wss',
       clientPort: 443,
     },
-    // dev convenience: keep /api -> uvicorn
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-        secure: false,
-        rewrite: (p) => p.replace(/^\/api/, ''),
-      },
-    },
+    // dev convenience: keep /api -> uvicorn (DISABLED FOR PRODUCTION)
+// proxy: {
+//   '/api': {
+//     target: 'http://127.0.0.1:8000',
+//     changeOrigin: true,
+//     secure: false,
+//     rewrite: (p) => p.replace(/^\/api/, ''),
+//   },
+// },
   },
   preview: {
     host: '0.0.0.0',
