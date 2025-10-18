@@ -35,11 +35,45 @@ export type EmployeePayload = Partial<Employee> & {
 };
 
 // ---------- Local helpers (no imports needed) ----------
-const API_BASE: string =
-  ((import.meta as any).env?.VITE_API_BASE_URL as string) ||
-  ((import.meta as any).env?.VITE_API_BASE as string) ||
-  ((window as any).__APP_API_BASE as string) ||
-  "";
+function resolveApiBase(): string {
+  const env =
+    ((import.meta as any).env?.VITE_API_BASE_URL as string) ||
+    ((import.meta as any).env?.VITE_API_BASE as string) ||
+    ((import.meta as any).env?.VITE_API_URL as string) ||
+    ((window as any).__APP_API_BASE as string);
+  
+  if (env) {
+    const cleaned = String(env).replace(/\/+$/g, "");
+    console.log('[Employee API] Using API base from env:', cleaned);
+    return cleaned;
+  }
+
+  // IMPROVED FALLBACK LOGIC
+  if (typeof window !== "undefined") {
+    const u = new URL(window.location.href);
+    
+    // Development: localhost:5173 -> localhost:8000
+    if (u.port === "5173") {
+      console.log('[Employee API] Development mode: Using localhost:8000');
+      return `${u.protocol}//${u.hostname}:8000`;
+    }
+    
+    // Production: app.hijazionline.org -> api.hijazionline.org
+    if (u.hostname === "app.hijazionline.org") {
+      console.log('[Employee API] Production mode: Using api.hijazionline.org');
+      return "https://api.hijazionline.org";
+    }
+    
+    // Default fallback for other environments
+    const fallback = `${u.protocol}//${u.hostname}${u.port ? ":" + u.port : ""}`;
+    console.log('[Employee API] Using fallback API base:', fallback);
+    return fallback;
+  }
+
+  return "";
+}
+
+const API_BASE: string = resolveApiBase();
 
 /** Authorization header from local/session storage (keeps your existing behavior) */
 function authHeaders(): Record<string, string> {

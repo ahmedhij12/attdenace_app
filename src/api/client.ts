@@ -10,11 +10,30 @@ function resolveApiBase(): string {
     (window as any).__APP_API_BASE ||
     localStorage.getItem("api_base");
   const fromEnv = (env ? String(env) : "").replace(/\/+$/g, "");
-  if (fromEnv) return fromEnv;
+  if (fromEnv) {
+    console.log('[API Client] Using API base from env:', fromEnv);
+    return fromEnv;
+  }
 
+  // IMPROVED FALLBACK LOGIC
   const u = new URL(window.location.href);
-  const port = u.port === "5173" ? "8000" : u.port;
-  return `${u.protocol}//${u.hostname}${port ? ":" + port : ""}`;
+  
+  // Development: localhost:5173 -> localhost:8000
+  if (u.port === "5173") {
+    console.log('[API Client] Development mode: Using localhost:8000');
+    return `${u.protocol}//${u.hostname}:8000`;
+  }
+  
+  // Production: app.hijazionline.org -> api.hijazionline.org
+  if (u.hostname === "app.hijazionline.org") {
+    console.log('[API Client] Production mode: Using api.hijazionline.org');
+    return "https://api.hijazionline.org";
+  }
+  
+  // Default fallback for other environments
+  const fallback = `${u.protocol}//${u.hostname}${u.port ? ":" + u.port : ""}`;
+  console.log('[API Client] Using fallback API base:', fallback);
+  return fallback;
 }
 
 class ApiClient {
@@ -132,11 +151,6 @@ class ApiClient {
   // Back-compat for Dashboard
   getEmployees(params?: any) {
     return this.listEmployees(params);
-  }
-
-  // Add missing method that's used in Dashboard
-  async getLogs(params?: any) {
-    return this.request(`/logs${this.buildQuery(params)}`);
   }
 
   getEmployee(id: string | number) {
@@ -320,4 +334,3 @@ export function authHeader(): Record<string, string> {
 export function getAuthHeader(): Record<string, string> {
   return authHeader();
 }
-
