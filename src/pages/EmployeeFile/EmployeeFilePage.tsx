@@ -721,7 +721,7 @@ export default function EmployeeFilePage() {
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-slate-900 dark:text-white truncate mb-1">{emp.name || '—'}</div>
                       <div className="text-sm text-slate-500 dark:text-slate-400 space-y-1">
-                        <div className="truncate">Code: {emp.code || emp.uid || '—'}</div>
+                        <div className="truncate">Code: {emp.code || '—'}</div>
                         {emp.branch && (
                           <div className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">{emp.branch}</div>
                         )}
