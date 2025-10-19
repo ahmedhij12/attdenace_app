@@ -482,7 +482,7 @@ async function submitEditDay() {
   async function tryFetch(seq: Array<{url:string, method:'POST'|'PUT', body:any}>) {
     for (const s of seq) {
       try {
-        const r = await fetch(`${API_BASE}${s.url}`, {
+        const r = await fetch(s.url, {
           method: s.method,
           headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: auth },
           credentials: 'include',
@@ -537,14 +537,40 @@ if (dayInTime && dayInTime.trim()) {
     // No existing IN → add_checkin (unchanged)
     tasks.push((async () => {
       try {
+        const payload = { in: inISONow, reason: dayReason || 'Manual check-in' };
+        console.log('🔍 Day 1 Debug - Adding IN event:', { 
+          dayInTime: dayInTime.trim(), 
+          inISONow, 
+          empId, 
+          payload 
+        });
+        
         const r = await fetch(`${API_BASE}/employee_files/${empId}/logs/add_checkin`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: auth },
           credentials: "include",
-          body: JSON.stringify({ in: inISONow, reason: dayReason || 'Manual check-in' }),
+          body: JSON.stringify(payload),
         });
-        if (!r.ok) throw new Error('add_checkin failed');
-      } catch { /* fallbacks unchanged */ }
+        
+        console.log('🔍 Day 1 Debug - API Response:', { 
+          status: r.status, 
+          ok: r.ok,
+          url: r.url 
+        });
+        
+        if (!r.ok) {
+          const errorText = await r.text();
+          console.error('🔍 Day 1 Debug - API Error:', errorText);
+          throw new Error(`add_checkin failed: ${r.status} ${errorText}`);
+        }
+        
+        const responseData = await r.json();
+        console.log('🔍 Day 1 Debug - Success response:', responseData);
+        
+      } catch (err) { 
+        console.error('🔍 Day 1 Debug - Exception:', err);
+        /* fallbacks unchanged */ 
+      }
     })());
   }
 }
@@ -777,21 +803,10 @@ function pairLogsMixedSafe(rows: any[]): any[] {
 function toYMD(v?: string | null): string | null {
   const d = tzParseLocal(v);
   if (!d) return null;
-  
-  // More robust date extraction to avoid Day 1 timezone edge cases
-  try {
-    // Convert to Baghdad timezone and extract date parts manually
-    const baghdadDate = new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Baghdad' }));
-    const year = baghdadDate.getFullYear();
-    const month = String(baghdadDate.getMonth() + 1).padStart(2, '0');
-    const day = String(baghdadDate.getDate()).padStart(2, '0');
-    
-    return `${year}-${month}-${day}`;
-  } catch (error) {
-    // Fallback to original method if manual parsing fails
-    console.warn('🔍 Day 1 Fix - Fallback to original toYMD for:', v);
-    return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Baghdad' });
-  }
+  // en-CA -> YYYY-MM-DD; force Baghdad zone
+  const result = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Baghdad' });
+  console.log('🔍 toYMD Debug:', { input: v, parsed: d, result });
+  return result;
 }
 
   const raw = Array.isArray(logs) ? logs : (logs as any)?.items ?? [];
@@ -910,12 +925,16 @@ const canEditOut = hasOut;
 function getAllDaysInRange(fromDate: string, toDate: string): string[] {
   if (!fromDate || !toDate) return [];
   const days: string[] = [];
-  const start = new Date(fromDate);
-  const end = new Date(toDate);
+  const start = new Date(fromDate + 'T12:00:00'); // Force noon to avoid timezone issues
+  const end = new Date(toDate + 'T12:00:00');
   const current = new Date(start);
 
   while (current <= end) {
-    days.push(current.toISOString().split('T')[0]);
+    // Use more robust date formatting to avoid timezone shifts
+    const year = current.getFullYear();
+    const month = String(current.getMonth() + 1).padStart(2, '0');
+    const day = String(current.getDate()).padStart(2, '0');
+    days.push(`${year}-${month}-${day}`);
     current.setDate(current.getDate() + 1);
   }
 
@@ -925,49 +944,17 @@ function getAllDaysInRange(fromDate: string, toDate: string): string[] {
 // Create calendar view with all days
 const allDays = getAllDaysInRange(from, to);
 const logsDisplayWithAllDays = allDays.map(dayStr => {
-  // Find logs for this specific day with improved Day 1 handling
+  // Find logs for this specific day
   const logsForDay = logsDisplay.filter((log: any) => {
     const logDate = toYMD(log.inISO ?? log.outISO ?? log.timestamp ?? log.date);
-    
-    // Debug logging for Day 1 specifically
-    if (dayStr.endsWith('-01')) {
-      console.log('🔍 Day 1 Filter Debug:', { 
-        dayStr, 
-        logDate, 
-        matches: logDate === dayStr,
-        logData: {
-          inISO: log.inISO,
-          outISO: log.outISO,
-          timestamp: log.timestamp,
-          date: log.date
-        }
-      });
-    }
-    
-    // Primary comparison
-    if (logDate === dayStr) return true;
-    
-    // Fallback: Try alternative date extraction methods for edge cases
-    const altLogDate = (() => {
-      const ts = log.inISO ?? log.outISO ?? log.timestamp ?? log.date;
-      if (!ts) return null;
-      
-      try {
-        // Direct ISO date extraction (handles YYYY-MM-DD format)
-        const match = String(ts).match(/^(\d{4}-\d{2}-\d{2})/);
-        return match ? match[1] : null;
-      } catch {
-        return null;
-      }
-    })();
-    
-    if (altLogDate === dayStr) {
-      console.log('🔍 Day 1 Fix - Using fallback date match:', { dayStr, altLogDate, originalLogDate: logDate });
-      return true;
-    }
-    
-    return false;
+    console.log('🔍 Log Filter Debug:', { dayStr, logDate, log: log.inISO ?? log.outISO ?? log.timestamp ?? log.date });
+    return logDate === dayStr;
   });
+
+  // If there are logs for this day, return them
+  if (logsForDay.length > 0) {
+    return logsForDay;
+  }
 
   // Otherwise, create an empty day entry
   return [{
@@ -986,13 +973,13 @@ const logsDisplayWithAllDays = allDays.map(dayStr => {
 }).flat();
 // status toggle
   async function setEmployeeStatus(empId: number, next: 'active' | 'left'): Promise<boolean> {
-  try {
-    return await employeeFileApi.updateEmployeeStatus(empId, next);
-  } catch (error) {
-    console.error('Status update error:', error);
-    return false;
+    try {
+      return await employeeFileApi.updateEmployeeStatus(empId, next);
+    } catch (error) {
+      console.error('Status update error:', error);
+      return false;
+    }
   }
-}
 
   const handleToggleStatus = async () => {
     if (!canEdit) return
@@ -1369,7 +1356,7 @@ const nationality = String(meta?.nationality || '').toLowerCase();
           let items: any[] = [];
           for (const p of paths) {
             try {
-              const r = await fetch(`${API_BASE}${p}`, { headers, credentials: 'include' });
+              const r = await fetch(p, { headers, credentials: 'include' });
               if (r.ok) {
                 const j = await r.json();
                 items = Array.isArray(j?.items) ? j.items : (Array.isArray(j) ? j : []);
@@ -2968,6 +2955,13 @@ export function CreateEmpModal({
   const [uid, setUid] = useState('')
   const [phone, setPhone] = useState('')
   const [branch, setBranch] = useState('')
+  
+  // Set default branch when branchOptions become available
+  useEffect(() => {
+    if (branchOptions.length > 0 && !branch) {
+      setBranch(branchOptions[0])
+    }
+  }, [branchOptions, branch])
   const [department, setDepartment] = useState('')
   const [brand, setBrand] = useState('')
   
@@ -3017,7 +3011,7 @@ if (!open) return null
     const paths = ['/employees', '/api/employees']
     for (const path of paths) {
       try {
-        const r = await fetch(`${API_BASE}${path}`, {
+        const r = await fetch(path, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: auth },
           credentials: 'include',
