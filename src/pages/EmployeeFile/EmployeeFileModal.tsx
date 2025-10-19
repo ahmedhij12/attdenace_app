@@ -482,7 +482,7 @@ async function submitEditDay() {
   async function tryFetch(seq: Array<{url:string, method:'POST'|'PUT', body:any}>) {
     for (const s of seq) {
       try {
-        const r = await fetch(s.url, {
+        const r = await fetch(`${API_BASE}${s.url}`, {
           method: s.method,
           headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: auth },
           credentials: 'include',
@@ -1481,7 +1481,7 @@ async function fetchLogsLikeLogsPage(
 
   for (const path of paths) {
     try {
-      const resp = await fetch(`${path}?${params.toString()}`, {
+      const resp = await fetch(`${API_BASE}${path}?${params.toString()}`, {
         method: 'GET',
         headers: { Accept: 'application/json', Authorization: auth },
         credentials: 'include',
@@ -2971,7 +2971,7 @@ if (!open) return null
     const paths = ['/employees', '/api/employees']
     for (const path of paths) {
       try {
-        const r = await fetch(path, {
+        const r = await fetch(`${API_BASE}${path}`, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: auth },
           credentials: 'include',
