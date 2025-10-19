@@ -777,8 +777,21 @@ function pairLogsMixedSafe(rows: any[]): any[] {
 function toYMD(v?: string | null): string | null {
   const d = tzParseLocal(v);
   if (!d) return null;
-  // en-CA -> YYYY-MM-DD; force Baghdad zone
-  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Baghdad' });
+  
+  // More robust date extraction to avoid Day 1 timezone edge cases
+  try {
+    // Convert to Baghdad timezone and extract date parts manually
+    const baghdadDate = new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Baghdad' }));
+    const year = baghdadDate.getFullYear();
+    const month = String(baghdadDate.getMonth() + 1).padStart(2, '0');
+    const day = String(baghdadDate.getDate()).padStart(2, '0');
+    
+    return `${year}-${month}-${day}`;
+  } catch (error) {
+    // Fallback to original method if manual parsing fails
+    console.warn('🔍 Day 1 Fix - Fallback to original toYMD for:', v);
+    return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Baghdad' });
+  }
 }
 
   const raw = Array.isArray(logs) ? logs : (logs as any)?.items ?? [];
@@ -912,16 +925,49 @@ function getAllDaysInRange(fromDate: string, toDate: string): string[] {
 // Create calendar view with all days
 const allDays = getAllDaysInRange(from, to);
 const logsDisplayWithAllDays = allDays.map(dayStr => {
-  // Find logs for this specific day
+  // Find logs for this specific day with improved Day 1 handling
   const logsForDay = logsDisplay.filter((log: any) => {
     const logDate = toYMD(log.inISO ?? log.outISO ?? log.timestamp ?? log.date);
-    return logDate === dayStr;
+    
+    // Debug logging for Day 1 specifically
+    if (dayStr.endsWith('-01')) {
+      console.log('🔍 Day 1 Filter Debug:', { 
+        dayStr, 
+        logDate, 
+        matches: logDate === dayStr,
+        logData: {
+          inISO: log.inISO,
+          outISO: log.outISO,
+          timestamp: log.timestamp,
+          date: log.date
+        }
+      });
+    }
+    
+    // Primary comparison
+    if (logDate === dayStr) return true;
+    
+    // Fallback: Try alternative date extraction methods for edge cases
+    const altLogDate = (() => {
+      const ts = log.inISO ?? log.outISO ?? log.timestamp ?? log.date;
+      if (!ts) return null;
+      
+      try {
+        // Direct ISO date extraction (handles YYYY-MM-DD format)
+        const match = String(ts).match(/^(\d{4}-\d{2}-\d{2})/);
+        return match ? match[1] : null;
+      } catch {
+        return null;
+      }
+    })();
+    
+    if (altLogDate === dayStr) {
+      console.log('🔍 Day 1 Fix - Using fallback date match:', { dayStr, altLogDate, originalLogDate: logDate });
+      return true;
+    }
+    
+    return false;
   });
-
-  // If there are logs for this day, return them
-  if (logsForDay.length > 0) {
-    return logsForDay;
-  }
 
   // Otherwise, create an empty day entry
   return [{
