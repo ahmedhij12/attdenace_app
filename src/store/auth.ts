@@ -15,7 +15,44 @@ type Actions = {
   toggleTheme: ()=>void
 }
 
-const initialBase = (import.meta.env.MODE === 'development') ? '/api' : 'https://api.hijazionline.org';
+// Resolve API base consistently with the API client
+function resolveInitialApiBase(): string {
+  const env = (import.meta as any).env || {};
+  const envApiBase = 
+    env.VITE_API_BASE_URL ||
+    env.VITE_API_BASE ||
+    env.VITE_API_URL ||
+    env.VITE_API ||
+    localStorage.getItem("api_base");
+    
+  if (envApiBase) {
+    return String(envApiBase).trim().replace(/\/+$/g, "");
+  }
+
+  const isDevelopment = env.MODE === 'development' || env.DEV === true;
+  
+  if (isDevelopment) {
+    // Development: try to determine if we're running locally
+    try {
+      const currentUrl = new URL(window.location.href);
+      const isLocalhost = ['localhost', '127.0.0.1'].includes(currentUrl.hostname);
+      const isDevPort = ['5173', '5174', '5175', '3000'].includes(currentUrl.port);
+      
+      if (isLocalhost && isDevPort) {
+        return `${currentUrl.protocol}//${currentUrl.hostname}:8000`;
+      }
+    } catch {
+      // Fallback if window.location not available during SSR
+    }
+    // Development fallback to relative path
+    return '/api';
+  }
+  
+  // Production
+  return 'https://api.hijazionline.org';
+}
+
+const initialBase = resolveInitialApiBase();
 
 // Safe localStorage access with fallbacks
 function safeGetItem(key: string, fallback: string = ''): string {

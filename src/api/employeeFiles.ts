@@ -98,18 +98,42 @@ export type EmpAdvanceUpsert = {
 }
 
 function resolveApiBase(): string {
+  // First check environment variables
   const env: any = (import.meta as any).env || {};
-  const viaEnv =
-    env.VITE_API_BASE_URL || env.VITE_API_BASE || env.VITE_API_URL || env.VITE_API || "";
-  let base = String(viaEnv || "").trim().replace(/\/+$/g, "");
+  const envApiBase =
+    env.VITE_API_BASE_URL || 
+    env.VITE_API_BASE || 
+    env.VITE_API_URL || 
+    env.VITE_API || 
+    localStorage.getItem("api_base");
   
-  if (base) {
-    console.log('[EmployeeFiles] Using API base from env:', base);
-    return base;
+  if (envApiBase) {
+    const cleaned = String(envApiBase).trim().replace(/\/+$/g, "");
+    console.log('[EmployeeFiles] Using API base from env:', cleaned);
+    return cleaned;
   }
   
-  // FIXED: Always use production API instead of localhost fallback
-  console.log('[EmployeeFiles] No env variable found, using production API');
+  // Auto-detect based on environment
+  const isDevelopment = env.MODE === 'development' || env.DEV === true;
+  
+  if (isDevelopment) {
+    try {
+      const currentUrl = new URL(window.location.href);
+      const isLocalhost = ['localhost', '127.0.0.1'].includes(currentUrl.hostname);
+      const isDevPort = ['5173', '5174', '5175', '3000'].includes(currentUrl.port);
+      
+      if (isLocalhost && isDevPort) {
+        const apiUrl = `${currentUrl.protocol}//${currentUrl.hostname}:8000`;
+        console.log('[EmployeeFiles] Development mode: Using local backend:', apiUrl);
+        return apiUrl;
+      }
+    } catch {
+      // Fallback for SSR or other issues
+    }
+  }
+  
+  // Production fallback
+  console.log('[EmployeeFiles] Using production API');
   return "https://api.hijazionline.org";
 }
 

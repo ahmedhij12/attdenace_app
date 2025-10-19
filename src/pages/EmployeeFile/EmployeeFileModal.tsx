@@ -30,14 +30,47 @@ const SalaryHistoryTab = React.lazy(
 import PayrollTab from './PayrollTab';
 import DeductionsTab from './DeductionsTab';
 
+// API Base resolver function - consistent with other API configurations
+function resolveApiBase(): string {
   const env = (import.meta as any)?.env || {};
-  const API_BASE = String(
-  env.VITE_API_BASE || 
-  env.VITE_API_URL || 
-  env.VITE_API_BASE_URL || 
-  env.VITE_API || 
-  'https://api.hijazionline.org'  // FIXED: Use production API instead of localhost
-).replace(/\/+$/, '');
+  const envApiBase = 
+    env.VITE_API_BASE_URL ||
+    env.VITE_API_BASE ||
+    env.VITE_API_URL ||
+    env.VITE_API ||
+    localStorage.getItem("api_base");
+    
+  if (envApiBase) {
+    const cleaned = String(envApiBase).trim().replace(/\/+$/g, "");
+    console.log('[EmployeeFileModal] Using API base from env:', cleaned);
+    return cleaned;
+  }
+
+  // Auto-detect based on environment
+  const isDevelopment = env.MODE === 'development' || env.DEV === true;
+  
+  if (isDevelopment) {
+    try {
+      const currentUrl = new URL(window.location.href);
+      const isLocalhost = ['localhost', '127.0.0.1'].includes(currentUrl.hostname);
+      const isDevPort = ['5173', '5174', '5175', '3000'].includes(currentUrl.port);
+      
+      if (isLocalhost && isDevPort) {
+        const apiUrl = `${currentUrl.protocol}//${currentUrl.hostname}:8000`;
+        console.log('[EmployeeFileModal] Development mode: Using local backend:', apiUrl);
+        return apiUrl;
+      }
+    } catch {
+      // Fallback for SSR or other issues
+    }
+  }
+  
+  // Production fallback
+  console.log('[EmployeeFileModal] Using production API');
+  return "https://api.hijazionline.org";
+}
+
+const API_BASE = resolveApiBase();
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -503,9 +536,8 @@ if (dayInTime && dayInTime.trim()) {
   } else {
     // No existing IN → add_checkin (unchanged)
     tasks.push((async () => {
-      const base = (import.meta as any)?.env?.VITE_API_BASE || "/api";
       try {
-        const r = await fetch(`${base}/employee_files/${empId}/logs/add_checkin`, {
+        const r = await fetch(`${API_BASE}/employee_files/${empId}/logs/add_checkin`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: auth },
           credentials: "include",
@@ -557,9 +589,8 @@ if (dayOutTime && dayOutTime.trim()) {
   } else {
     // No existing OUT → add_checkout (unchanged, already sending { out: ... })
     tasks.push((async () => {
-      const base = (import.meta as any)?.env?.VITE_API_BASE || "/api";
       try {
-        const r = await fetch(`${base}/employee_files/${empId}/logs/add_checkout`, {
+        const r = await fetch(`${API_BASE}/employee_files/${empId}/logs/add_checkout`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: auth },
           credentials: "include",

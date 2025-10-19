@@ -3,29 +3,43 @@ import { useAuthStore } from '@/store/auth';
 export const BRANCHES: string[] = [];
 
 function resolveApiBase(): string {
-  const env =
-    (import.meta as any).env?.VITE_API_BASE ||
-    (import.meta as any).env?.VITE_API_URL ||
-    (import.meta as any).env?.VITE_API ||
+  // Check environment variables first
+  const env = (import.meta as any).env || {};
+  const envApiBase = 
+    env.VITE_API_BASE_URL ||
+    env.VITE_API_BASE ||
+    env.VITE_API_URL ||
+    env.VITE_API ||
     (window as any).__APP_API_BASE ||
     localStorage.getItem("api_base");
-  const fromEnv = (env ? String(env) : "").replace(/\/+$/g, "");
-  if (fromEnv) {
-    console.log('[API Client] Using API base from env:', fromEnv);
-    return fromEnv;
+    
+  if (envApiBase) {
+    const cleaned = String(envApiBase).trim().replace(/\/+$/g, "");
+    console.log('[API Client] Using API base from env:', cleaned);
+    return cleaned;
   }
 
-  // FIXED: Always prefer production API URL
-  const u = new URL(window.location.href);
+  // Auto-detect based on current environment
+  const currentUrl = new URL(window.location.href);
+  const isDevelopment = env.MODE === 'development' || env.DEV === true;
+  const isLocalhost = ['localhost', '127.0.0.1'].includes(currentUrl.hostname);
+  const isDevPort = ['5173', '5174', '5175', '3000'].includes(currentUrl.port);
+  
+  if (isDevelopment || (isLocalhost && isDevPort)) {
+    // Development: use local backend
+    const apiUrl = `${currentUrl.protocol}//${currentUrl.hostname}:8000`;
+    console.log('[API Client] Development mode: Using local backend:', apiUrl);
+    return apiUrl;
+  }
   
   // Production: app.hijazionline.org -> api.hijazionline.org
-  if (u.hostname === "app.hijazionline.org") {
+  if (currentUrl.hostname === "app.hijazionline.org") {
     console.log('[API Client] Production mode: Using api.hijazionline.org');
     return "https://api.hijazionline.org";
   }
   
-  // FIXED: Default to production API for all other cases including localhost
-  console.log('[API Client] Using production API base');
+  // Fallback to production API
+  console.log('[API Client] Fallback: Using production API base');
   return "https://api.hijazionline.org";
 }
 
