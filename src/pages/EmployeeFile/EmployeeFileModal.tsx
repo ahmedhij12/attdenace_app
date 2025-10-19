@@ -1323,7 +1323,7 @@ const nationality = String(meta?.nationality || '').toLowerCase();
           let items: any[] = [];
           for (const p of paths) {
             try {
-              const r = await fetch(p, { headers, credentials: 'include' });
+              const r = await fetch(`${API_BASE}${p}`, { headers, credentials: 'include' });
               if (r.ok) {
                 const j = await r.json();
                 items = Array.isArray(j?.items) ? j.items : (Array.isArray(j) ? j : []);
