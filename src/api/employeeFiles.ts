@@ -756,6 +756,9 @@ const employeeFileApi = {
 
   // bulk operations
   bulkDeleteEmployees,
+
+  // status updates
+  updateEmployeeStatus,
 };
 
 export default employeeFileApi;
@@ -775,4 +778,15 @@ export async function exportPayslipCsv(employee_id: number, month: string) {
   const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);
   return await res.blob();
+}
+
+// --- employee status updates ---
+export async function updateEmployeeStatus(employeeId: ID, status: 'active' | 'left'): Promise<boolean> {
+  try {
+    await client.updateEmployeeStatus(employeeId, status);
+    return true;
+  } catch (error) {
+    console.error('Failed to update employee status:', error);
+    return false;
+  }
 }

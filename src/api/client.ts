@@ -179,8 +179,18 @@ class ApiClient {
   }
 
   deleteEmployee(id: string | number) {
-    return this.request(`/employees/${id}`, { method: "DELETE" });
-  }
+  return this.request(`/employees/${id}`, { method: "DELETE" });
+}
+
+updateEmployeeStatus(id: string | number, status: 'active' | 'left') {
+  return this.request(`/employees/${id}/status`, {
+    method: "PUT",
+    body: JSON.stringify({
+      status: status,
+      is_active: status === 'active' ? 1 : 0
+    }),
+  });
+}
 
   probationDue(params?: { days?: number }) {
     return this.request(`/employees/probation_due${this.buildQuery(params)}`);

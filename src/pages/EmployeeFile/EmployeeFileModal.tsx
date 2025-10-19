@@ -940,24 +940,13 @@ const logsDisplayWithAllDays = allDays.map(dayStr => {
 }).flat();
 // status toggle
   async function setEmployeeStatus(empId: number, next: 'active' | 'left'): Promise<boolean> {
-    if (!token) throw new Error('Unauthorized')
-    const auth = token.startsWith('Bearer ') ? token : `Bearer ${token}`
-    const candidates = [{ body: { status: next } }, { body: { is_active: next === 'active' ? 1 : 0 } }]
-    for (const path of ['/employees', '/api/employees']) {
-      for (const cand of candidates) {
-        try {
-          const resp = await fetch(`${path}/${empId}/status`, {
-            method: 'PUT',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: auth },
-            credentials: 'include',
-            body: JSON.stringify(cand.body),
-          })
-          if (resp.ok) return true
-        } catch {}
-      }
-    }
-    return false
+  try {
+    return await employeeFileApi.updateEmployeeStatus(empId, next);
+  } catch (error) {
+    console.error('Status update error:', error);
+    return false;
   }
+}
 
   const handleToggleStatus = async () => {
     if (!canEdit) return
