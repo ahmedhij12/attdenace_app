@@ -33,7 +33,6 @@ function fmtLocal(dt?: string | null) {
 
 
 export default function LateOverridesTab({ empId, uid, month }: Props) {
-  const token = useAuthStore((s: any) => s.token) as string | null;
   const role = (useAuthStore((s: any) => s.role) || "").toLowerCase();
   const canEdit = role === "admin" || role === "hr";
 
@@ -46,10 +45,7 @@ export default function LateOverridesTab({ empId, uid, month }: Props) {
   const [draft, setDraft] = React.useState<Record<string, number>>({});  // final amount
   const [notes, setNotes] = React.useState<Record<string, string>>({});  // reason/note (by date)
 
-  const auth = React.useMemo(() => {
-    if (!token) return undefined;
-    return token.startsWith("Bearer ") ? token : `Bearer ${token}`;
-  }, [token]);
+
 
   // StrictMode-safe loader with payroll fallback
   const seq = React.useRef(0);
@@ -59,23 +55,22 @@ export default function LateOverridesTab({ empId, uid, month }: Props) {
     setError(null);
     try {
       const { from, to } = monthRange(month);
-      const headers: Record<string, string> = { Accept: "application/json" };
-      if (auth) headers.Authorization = auth;
-
-      // Try employee_files proxy first, then direct payroll
-      const urls = [
-        `/employee_files/${empId}/late_events?from=${from}&to=${to}`,
-        `/api/employee_files/${empId}/late_events?from=${from}&to=${to}`,
-        `/payroll/late_events?employee_id=${empId}&from=${from}&to=${to}`,
-        `/api/payroll/late_events?employee_id=${empId}&from=${from}&to=${to}`,
-      ];
 
       let data: any = null;
-      for (const url of urls) {
+      
+      // Try employee_files proxy first, then direct payroll using API client
+      try {
+        data = await api.get(`/employee_files/${empId}/late_events`, { from, to });
+      } catch (err: any) {
+        console.warn('Employee files proxy failed:', err?.message || err);
+        
+        // Fallback to direct payroll endpoint
         try {
-          const r = await fetch(url, { headers, credentials: "include" });
-          if (r.ok) { data = await r.json(); break; }
-        } catch { /* try next */ }
+          data = await api.get('/payroll/late_events', { employee_id: empId, from, to });
+        } catch (err2: any) {
+          console.warn('Direct payroll failed:', err2?.message || err2);
+          throw err2; // Re-throw the last error
+        }
       }
 
       if (seq.current !== my) return;
@@ -121,7 +116,7 @@ export default function LateOverridesTab({ empId, uid, month }: Props) {
     } finally {
       if (seq.current === my) setLoading(false);
     }
-  }, [empId, month, auth]);
+  }, [empId, month]);
 
   React.useEffect(() => { load(); }, [load]);
 
