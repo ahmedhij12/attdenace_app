@@ -192,6 +192,7 @@ export default function LateOverridesTab({ empId, uid, month }: Props) {
     setEditing(ed => ({ ...ed, [date]: false }));
   }
 
+  
   async function deleteOverride(date: string) {
     const row = rows.find(r => r.date === date);
     const id = row?.override?.id;
