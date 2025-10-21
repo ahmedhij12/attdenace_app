@@ -1819,9 +1819,11 @@ This cannot be undone. Continue?`
                               onChange={(e) => setEditVals({ ...editVals, brand: e.target.value })}
                             >
                               <option value="">—</option>
-                              <option value="Awtar">Awtar</option>
-                              <option value="360">360</option>
-                              <option value="AA Chicken">AA Chicken</option>
+                              {BRAND_OPTIONS.map((brandOption) => (
+                                <option key={brandOption} value={brandOption}>
+                                  {brandOption}
+                                </option>
+                              ))}
                             </select>
                           )}
                         </div>
